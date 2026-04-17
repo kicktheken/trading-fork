@@ -24,13 +24,13 @@ barsRoute.get('/', async (c) => {
   }
 
   const end = new Date();
-  const start = new Date(end.getTime() - 1000 * 60 * 60 * 24 * 35); // ~5 weeks for a full month of trading days
+  const start = new Date(end.getTime() - 1000 * 60 * 60 * 24 * 370); // ~1 year, padded for non-trading days
 
   const url = new URL(`/v2/stocks/${encodeURIComponent(ticker)}/bars`, c.env.ALPACA_DATA_BASE);
   url.searchParams.set('timeframe', '1Day');
   url.searchParams.set('start', start.toISOString());
   url.searchParams.set('end', end.toISOString());
-  url.searchParams.set('limit', '60');
+  url.searchParams.set('limit', '400');
   url.searchParams.set('adjustment', 'raw');
   url.searchParams.set('feed', 'iex');
 

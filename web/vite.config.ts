@@ -10,6 +10,7 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    allowedHosts: ['.telebit.io'],
   },
   build: {
     outDir: 'dist',
