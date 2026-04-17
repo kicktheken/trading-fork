@@ -1,0 +1,11 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit the real file.
+ALPACA_KEY_ID=""
+ALPACA_SECRET=""
+IBKR_CONSUMER_KEY=""
+IBKR_CONSUMER_SECRET=""
+SCHWAB_CLIENT_ID=""
+SCHWAB_CLIENT_SECRET=""
+
+# Skip Access JWT verification locally by leaving ACCESS_AUD empty in wrangler.toml
+# and setting ACCESS_DEV_BYPASS=1 here.
+ACCESS_DEV_BYPASS="1"

@@ -1,0 +1,34 @@
+name = "trading-fork"
+main = "worker/src/index.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static SPA assets produced by `pnpm build:web`
+[assets]
+directory = "./web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# KV namespace for broker OAuth tokens.
+# Create with:  wrangler kv namespace create SECRETS_KV
+# Then paste the returned id below and run `wrangler deploy`.
+[[kv_namespaces]]
+binding = "SECRETS_KV"
+id = "df6e96b1a46c4967aa809926d251417f"
+
+# Required secrets (set via `wrangler secret put <NAME>` in prod,
+# or put in .dev.vars for local dev):
+#   ALPACA_KEY_ID
+#   ALPACA_SECRET
+#   IBKR_CONSUMER_KEY
+#   IBKR_CONSUMER_SECRET
+#   SCHWAB_CLIENT_ID
+#   SCHWAB_CLIENT_SECRET
+#
+# Required vars (set here or via secrets):
+[vars]
+ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
+ACCESS_AUD = "REPLACE_WITH_ACCESS_APP_AUD_TAG"
+ALPACA_DATA_BASE = "https://data.alpaca.markets"
+SCHWAB_REDIRECT_URI = "https://your-domain.example/api/auth/schwab/callback"
+IBKR_CALLBACK_URI = "https://your-domain.example/api/auth/ibkr/callback"
