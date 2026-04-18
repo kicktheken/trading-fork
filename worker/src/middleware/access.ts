@@ -46,7 +46,29 @@ export const accessAuth: MiddlewareHandler<{ Bindings: Env; Variables: AppVariab
     c.set('identity', { email, sub });
     return next();
   } catch (e) {
-    return c.json({ error: 'invalid access token', detail: String(e) }, 401);
+    // Decode without verifying so we can surface the actual aud/iss in the response.
+    let actualAud: unknown;
+    let actualIss: unknown;
+    try {
+      const payloadB64 = token.split('.')[1] ?? '';
+      const padded = payloadB64 + '='.repeat((4 - (payloadB64.length % 4)) % 4);
+      const decoded = JSON.parse(atob(padded.replace(/-/g, '+').replace(/_/g, '/')));
+      actualAud = decoded.aud;
+      actualIss = decoded.iss;
+    } catch {
+      // ignore
+    }
+    return c.json(
+      {
+        error: 'invalid access token',
+        detail: String(e),
+        expectedAud: env.ACCESS_AUD,
+        expectedIss: `https://${env.ACCESS_TEAM_DOMAIN}`,
+        actualAud,
+        actualIss,
+      },
+      401,
+    );
   }
 };
 

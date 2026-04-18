@@ -2,6 +2,9 @@ name = "trading-fork"
 main = "worker/src/index.ts"
 compatibility_date = "2026-04-01"
 compatibility_flags = ["nodejs_compat"]
+routes = [
+  { pattern = "tradingfork.ihasacode.com", custom_domain = true }
+]
 
 # Static SPA assets produced by `pnpm build:web`
 [assets]
@@ -27,8 +30,8 @@ id = "df6e96b1a46c4967aa809926d251417f"
 #
 # Required vars (set here or via secrets):
 [vars]
-ACCESS_TEAM_DOMAIN = "your-team.cloudflareaccess.com"
-ACCESS_AUD = "REPLACE_WITH_ACCESS_APP_AUD_TAG"
+ACCESS_TEAM_DOMAIN = "kkoala.cloudflareaccess.com"
+ACCESS_AUD = "30ca312555228ea1a57f3be74169fbe7da23a95505ca6e977db8967aa3208023"
 ALPACA_DATA_BASE = "https://data.alpaca.markets"
-SCHWAB_REDIRECT_URI = "https://your-domain.example/api/auth/schwab/callback"
-IBKR_CALLBACK_URI = "https://your-domain.example/api/auth/ibkr/callback"
+SCHWAB_REDIRECT_URI = "https://tradingfork.ihasacode.com/api/auth/schwab/callback"
+IBKR_CALLBACK_URI = "https://tradingfork.ihasacode.com/api/auth/ibkr/callback"
