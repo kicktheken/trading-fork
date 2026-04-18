@@ -1,19 +1,41 @@
 import { Hono } from 'hono';
 import type { AppVariables, Env } from '../env';
-import { putSchwabTokens } from '../kv';
+import { schwabAuthFor } from '../brokers/schwab';
+import { loadSchwabTokens } from '../kv';
 
 export const authSchwabRoute = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
-const AUTHORIZE_URL = 'https://api.schwabapi.com/v1/oauth/authorize';
-const TOKEN_URL = 'https://api.schwabapi.com/v1/oauth/token';
+authSchwabRoute.get('/start', async (c) => {
+  const identity = c.get('identity');
+  const debug = c.req.query('debug') === '1';
 
-authSchwabRoute.get('/start', (c) => {
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: c.env.SCHWAB_CLIENT_ID,
-    redirect_uri: c.env.SCHWAB_REDIRECT_URI,
-  });
-  return c.redirect(`${AUTHORIZE_URL}?${params.toString()}`);
+  const missing: string[] = [];
+  if (!c.env.SCHWAB_CLIENT_ID) missing.push('SCHWAB_CLIENT_ID');
+  if (!c.env.SCHWAB_CLIENT_SECRET) missing.push('SCHWAB_CLIENT_SECRET');
+  if (!c.env.SCHWAB_REDIRECT_URI) missing.push('SCHWAB_REDIRECT_URI');
+  if (missing.length > 0) {
+    return c.json({ error: 'missing schwab config', missing }, 500);
+  }
+
+  try {
+    const auth = schwabAuthFor(c.env, identity.sub);
+    const result = await auth.getAuthorizationUrl();
+    if (debug) {
+      return c.json({
+        authUrl: result.authUrl,
+        generatedState: result.generatedState ?? null,
+        redirectUri: c.env.SCHWAB_REDIRECT_URI,
+        clientIdPresent: !!c.env.SCHWAB_CLIENT_ID,
+        clientIdTail: c.env.SCHWAB_CLIENT_ID?.slice(-6) ?? null,
+      });
+    }
+    if (!result.authUrl || !/^https?:\/\//.test(result.authUrl)) {
+      return c.json({ error: 'invalid authUrl from SDK', authUrl: result.authUrl }, 500);
+    }
+    return c.redirect(result.authUrl);
+  } catch (e) {
+    return c.json({ error: 'getAuthorizationUrl failed', detail: String(e) }, 500);
+  }
 });
 
 authSchwabRoute.get('/callback', async (c) => {
@@ -21,36 +43,17 @@ authSchwabRoute.get('/callback', async (c) => {
   if (!code) return c.json({ error: 'missing code' }, 400);
   const identity = c.get('identity');
 
-  const basic = btoa(`${c.env.SCHWAB_CLIENT_ID}:${c.env.SCHWAB_CLIENT_SECRET}`);
-  const res = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      authorization: `Basic ${basic}`,
-    },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: c.env.SCHWAB_REDIRECT_URI,
-    }),
-  });
-
-  if (!res.ok) {
-    return c.json({ error: 'schwab token exchange failed', detail: await res.text() }, 502);
+  const auth = schwabAuthFor(c.env, identity.sub);
+  try {
+    await auth.exchangeCode(code);
+  } catch (e) {
+    return c.json({ error: 'schwab token exchange failed', detail: String(e) }, 502);
   }
-
-  const data = (await res.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  };
-
-  await putSchwabTokens(c.env, identity.sub, {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-    updatedAt: Date.now(),
-  });
-
   return c.redirect('/');
+});
+
+authSchwabRoute.get('/status', async (c) => {
+  const identity = c.get('identity');
+  const tokens = await loadSchwabTokens(c.env, identity.sub);
+  return c.json({ linked: !!tokens, expiresAt: tokens?.expiresAt ?? null });
 });

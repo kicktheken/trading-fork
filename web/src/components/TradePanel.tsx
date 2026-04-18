@@ -8,7 +8,7 @@ interface Props {
 }
 
 export function TradePanel({ ticker, lines }: Props) {
-  const [broker, setBroker] = useState<OrderRequest['broker']>('ibkr');
+  const [broker, setBroker] = useState<OrderRequest['broker']>('schwab');
   const [side, setSide] = useState<OrderRequest['side']>('buy');
   const [quantity, setQuantity] = useState(1);
   const [status, setStatus] = useState<string | null>(null);
@@ -42,8 +42,8 @@ export function TradePanel({ ticker, lines }: Props) {
       <div>
         <label>Broker</label>
         <select value={broker} onChange={(e) => setBroker(e.target.value as OrderRequest['broker'])}>
-          <option value="ibkr">Interactive Brokers</option>
           <option value="schwab">Schwab</option>
+          <option value="ibkr">Interactive Brokers</option>
         </select>
       </div>
       <div>

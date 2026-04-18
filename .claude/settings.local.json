@@ -7,7 +7,21 @@
       "Bash(pnpm install *)",
       "Bash(pnpm -r typecheck)",
       "Bash(pnpm build *)",
-      "Bash(pnpm exec *)"
+      "Bash(pnpm exec *)",
+      "WebFetch(domain:developer.schwab.com)",
+      "Bash(curl -s \"https://www.npmjs.com/package/@sudowealth/schwab-api\" -H \"Accept: text/html\" -L)",
+      "Bash(curl -s \"https://registry.npmjs.org/@sudowealth/schwab-api\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-api/main/README.md\")",
+      "WebFetch(domain:schwab-py.readthedocs.io)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-mcp/main/src/auth/schwab-client.ts\")",
+      "Bash(curl -sL \"https://api.github.com/repos/sudowealth/schwab-mcp/git/trees/main?recursive=1\")",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in data.get\\('tree',[]\\) if t['path'].endswith\\(\\('.ts','.toml','.json'\\)\\) and 'node_modules' not in t['path']]\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-mcp/main/src/auth/client.ts\")",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-mcp/main/src/tools/trader/index.ts\")",
+      "Bash(curl *)"
     ]
   }
 }
