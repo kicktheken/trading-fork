@@ -40,12 +40,16 @@ authSchwabRoute.get('/start', async (c) => {
 
 authSchwabRoute.get('/callback', async (c) => {
   const code = c.req.query('code');
+  const state = c.req.query('state');
   if (!code) return c.json({ error: 'missing code' }, 400);
   const identity = c.get('identity');
 
   const auth = schwabAuthFor(c.env, identity.sub);
   try {
-    await auth.exchangeCode(code);
+    // The SDK encodes the PKCE code_verifier inside `state` during
+    // getAuthorizationUrl; it must be passed back here so exchangeCode can
+    // recover it (each request gets a fresh auth instance with no memory).
+    await auth.exchangeCode(code, state);
   } catch (e) {
     return c.json({ error: 'schwab token exchange failed', detail: String(e) }, 502);
   }
