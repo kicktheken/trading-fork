@@ -69,6 +69,35 @@ select {
   color: var(--text);
 }
 
+.ema-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.ema-label {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.ema-pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.ema-pct-up {
+  color: var(--accent);
+}
+
+.ema-pct-down {
+  color: var(--danger);
+}
+
 .chart-wrap {
   flex: 1;
   min-height: 0;

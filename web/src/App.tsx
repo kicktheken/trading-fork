@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Chart, type PriceLines } from './components/Chart';
 import { TradePanel } from './components/TradePanel';
 import { fetchBars, type Bar } from './api/client';
+import { ema, pctChangeOverLookback } from './lib/ema';
+
+const EMA_LOOKBACK = 20;
 
 export function App() {
   const [tickerInput, setTickerInput] = useState('AAPL');
@@ -45,6 +48,19 @@ export function App() {
     if (next) setTicker(next);
   };
 
+  const emaStats = useMemo(() => {
+    const ema10 = ema(bars, 10);
+    const ema20 = ema(bars, 20);
+    return {
+      ema10: pctChangeOverLookback(ema10, EMA_LOOKBACK),
+      ema20: pctChangeOverLookback(ema20, EMA_LOOKBACK),
+    };
+  }, [bars]);
+
+  const fmtPct = (v: number | null) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
+  const pctClass = (v: number | null) =>
+    v == null ? 'ema-pct' : v >= 0 ? 'ema-pct ema-pct-up' : 'ema-pct ema-pct-down';
+
   return (
     <div className="app">
       <div className="topbar">
@@ -59,6 +75,12 @@ export function App() {
         <button onClick={load} disabled={loading}>
           {loading ? '…' : 'Load'}
         </button>
+      </div>
+      <div className="ema-bar" title={`% change of the EMA over the last ${EMA_LOOKBACK} bars`}>
+        <span className="ema-label">EMA10 {EMA_LOOKBACK}b</span>
+        <span className={pctClass(emaStats.ema10)}>{fmtPct(emaStats.ema10)}</span>
+        <span className="ema-label">EMA20 {EMA_LOOKBACK}b</span>
+        <span className={pctClass(emaStats.ema20)}>{fmtPct(emaStats.ema20)}</span>
       </div>
       <div className="chart-wrap">
         <Chart bars={bars} lines={lines} onLinesChange={setLines} />
