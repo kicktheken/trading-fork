@@ -21,7 +21,10 @@
       "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in data.get\\('tree',[]\\) if t['path'].endswith\\(\\('.ts','.toml','.json'\\)\\) and 'node_modules' not in t['path']]\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-mcp/main/src/auth/client.ts\")",
       "Bash(curl -sL \"https://raw.githubusercontent.com/sudowealth/schwab-mcp/main/src/tools/trader/index.ts\")",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(pnpm --filter web view klinecharts version)",
+      "Bash(pnpm --filter web list klinecharts)",
+      "Bash(npm view *)"
     ]
   }
 }
