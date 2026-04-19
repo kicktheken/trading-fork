@@ -3,6 +3,7 @@ import {
   init,
   dispose,
   registerOverlay,
+  PolygonType,
   type Chart as KChart,
   type KLineData,
   type OverlayFigure,
@@ -178,6 +179,16 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
             upWickColor: '#3fb950',
             downWickColor: '#f85149',
           },
+        },
+        indicator: {
+          bars: [
+            {
+              style: PolygonType.Fill,
+              upColor: '#3fb950',
+              downColor: '#f85149',
+              noChangeColor: '#8b97a4',
+            },
+          ],
         },
       },
     });
