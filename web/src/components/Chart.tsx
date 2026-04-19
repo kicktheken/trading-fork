@@ -182,6 +182,7 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
       },
     });
     chartRef.current = chart ?? null;
+    chart?.createIndicator('VOL', false, { height: 80 });
     return () => {
       if (elRef.current) dispose(elRef.current);
       chartRef.current = null;
