@@ -3,6 +3,7 @@ import { Chart, type PriceLines } from './components/Chart';
 import { TradePanel } from './components/TradePanel';
 import { fetchBars, type Bar } from './api/client';
 import { ema, pctChangeOverLookback } from './lib/ema';
+import { aggregate, type Timeframe } from './lib/aggregate';
 
 const EMA_LOOKBACK = 20;
 
@@ -10,6 +11,7 @@ export function App() {
   const [tickerInput, setTickerInput] = useState('AAPL');
   const [ticker, setTicker] = useState('AAPL');
   const [bars, setBars] = useState<Bar[]>([]);
+  const [timeframe, setTimeframe] = useState<Timeframe>('daily');
   const [lines, setLines] = useState<PriceLines>({ entry: 0, stop: 0, target: 0 });
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -18,7 +20,7 @@ export function App() {
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    fetchBars(ticker)
+    fetchBars(ticker, timeframe)
       .then((data) => {
         if (cancelled) return;
         setBars(data);
@@ -41,21 +43,23 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [ticker]);
+  }, [ticker, timeframe]);
 
   const load = () => {
     const next = tickerInput.trim().toUpperCase();
     if (next) setTicker(next);
   };
 
+  const displayBars = useMemo(() => aggregate(bars, timeframe), [bars, timeframe]);
+
   const emaStats = useMemo(() => {
-    const ema10 = ema(bars, 10);
-    const ema20 = ema(bars, 20);
+    const ema10 = ema(displayBars, 10);
+    const ema20 = ema(displayBars, 20);
     return {
       ema10: pctChangeOverLookback(ema10, EMA_LOOKBACK),
       ema20: pctChangeOverLookback(ema20, EMA_LOOKBACK),
     };
-  }, [bars]);
+  }, [displayBars]);
 
   const fmtPct = (v: number | null) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
   const pctClass = (v: number | null) =>
@@ -75,6 +79,20 @@ export function App() {
         <button onClick={load} disabled={loading}>
           {loading ? '…' : 'Load'}
         </button>
+        <div className="tf-toggle" role="group" aria-label="Timeframe">
+          <button
+            className={timeframe === 'daily' ? 'tf-btn active' : 'tf-btn'}
+            onClick={() => setTimeframe('daily')}
+          >
+            D
+          </button>
+          <button
+            className={timeframe === 'weekly' ? 'tf-btn active' : 'tf-btn'}
+            onClick={() => setTimeframe('weekly')}
+          >
+            W
+          </button>
+        </div>
       </div>
       <div className="ema-bar" title={`% change of the EMA over the last ${EMA_LOOKBACK} bars`}>
         <span className="ema-label">EMA10 {EMA_LOOKBACK}b</span>
@@ -83,7 +101,7 @@ export function App() {
         <span className={pctClass(emaStats.ema20)}>{fmtPct(emaStats.ema20)}</span>
       </div>
       <div className="chart-wrap">
-        <Chart bars={bars} lines={lines} onLinesChange={setLines} />
+        <Chart bars={displayBars} lines={lines} onLinesChange={setLines} />
       </div>
       <TradePanel ticker={ticker} lines={lines} />
       {err && <div className="error" style={{ padding: 8 }}>{err}</div>}

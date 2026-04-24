@@ -25,8 +25,8 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function fetchBars(ticker: string): Promise<Bar[]> {
-  const res = await fetch(`/api/bars?ticker=${encodeURIComponent(ticker)}`);
+export async function fetchBars(ticker: string, tf: 'daily' | 'weekly' = 'daily'): Promise<Bar[]> {
+  const res = await fetch(`/api/bars?ticker=${encodeURIComponent(ticker)}&tf=${tf}`);
   const data = await json<{ bars: Bar[] }>(res);
   return data.bars;
 }

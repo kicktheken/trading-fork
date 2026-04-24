@@ -69,6 +69,27 @@ select {
   color: var(--text);
 }
 
+.tf-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.tf-btn {
+  padding: 10px 12px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #0d1218 !important;
+  color: var(--muted);
+  min-width: 36px;
+}
+
+.tf-btn.active {
+  background: #1a2330 !important;
+  color: var(--text);
+}
+
 .ema-bar {
   display: flex;
   gap: 10px;
