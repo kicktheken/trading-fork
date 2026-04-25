@@ -7,9 +7,22 @@ import { aggregate, type Timeframe } from './lib/aggregate';
 
 const EMA_LOOKBACK = 20;
 
+const TICKER_STORAGE_KEY = 'trading-fork:ticker';
+
+function loadStoredTicker(): string {
+  try {
+    const v = localStorage.getItem(TICKER_STORAGE_KEY);
+    if (v && /^[A-Z.\-]{1,10}$/.test(v)) return v;
+  } catch {
+    // localStorage may be unavailable (privacy mode, etc.)
+  }
+  return 'QQQ';
+}
+
 export function App() {
-  const [tickerInput, setTickerInput] = useState('AAPL');
-  const [ticker, setTicker] = useState('AAPL');
+  const initialTicker = loadStoredTicker();
+  const [tickerInput, setTickerInput] = useState(initialTicker);
+  const [ticker, setTicker] = useState(initialTicker);
   const [bars, setBars] = useState<Bar[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>('daily');
   const [lines, setLines] = useState<PriceLines>({ entry: 0, stop: 0, target: 0 });
@@ -47,7 +60,14 @@ export function App() {
 
   const load = () => {
     const next = tickerInput.trim().toUpperCase();
-    if (next) setTicker(next);
+    if (next) {
+      setTicker(next);
+      try {
+        localStorage.setItem(TICKER_STORAGE_KEY, next);
+      } catch {
+        // ignore
+      }
+    }
   };
 
   const displayBars = useMemo(() => aggregate(bars, timeframe), [bars, timeframe]);
