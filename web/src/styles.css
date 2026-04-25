@@ -68,7 +68,7 @@ select {
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   background: var(--panel);
   align-items: center;
   flex-shrink: 0;

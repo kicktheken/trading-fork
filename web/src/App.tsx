@@ -67,6 +67,15 @@ export function App() {
 
   return (
     <div className="app">
+      <div className="ema-bar" title={`% change of the EMA over the last ${EMA_LOOKBACK} bars`}>
+        <span className="ema-label">EMA10 {EMA_LOOKBACK}b</span>
+        <span className={pctClass(emaStats.ema10)}>{fmtPct(emaStats.ema10)}</span>
+        <span className="ema-label">EMA20 {EMA_LOOKBACK}b</span>
+        <span className={pctClass(emaStats.ema20)}>{fmtPct(emaStats.ema20)}</span>
+      </div>
+      <div className="chart-wrap">
+        <Chart bars={displayBars} lines={lines} onLinesChange={setLines} />
+      </div>
       <div className="topbar">
         <input
           value={tickerInput}
@@ -93,15 +102,6 @@ export function App() {
             W
           </button>
         </div>
-      </div>
-      <div className="ema-bar" title={`% change of the EMA over the last ${EMA_LOOKBACK} bars`}>
-        <span className="ema-label">EMA10 {EMA_LOOKBACK}b</span>
-        <span className={pctClass(emaStats.ema10)}>{fmtPct(emaStats.ema10)}</span>
-        <span className="ema-label">EMA20 {EMA_LOOKBACK}b</span>
-        <span className={pctClass(emaStats.ema20)}>{fmtPct(emaStats.ema20)}</span>
-      </div>
-      <div className="chart-wrap">
-        <Chart bars={displayBars} lines={lines} onLinesChange={setLines} />
       </div>
       <TradePanel ticker={ticker} lines={lines} />
       {err && <div className="error" style={{ padding: 8 }}>{err}</div>}
