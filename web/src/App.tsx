@@ -82,6 +82,7 @@ export function App() {
           onChange={(e) => setTickerInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && load()}
           onFocus={(e) => e.currentTarget.select()}
+          onBlur={load}
           placeholder="TICKER"
           autoCapitalize="characters"
           autoCorrect="off"
