@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { submitOrder, type OrderRequest } from '../api/client';
 import type { PriceLines } from './Chart';
+import { SwipeButton } from './SwipeButton';
 
 interface Props {
   ticker: string;
@@ -69,9 +70,14 @@ export function TradePanel({ ticker, lines }: Props) {
           value={`${lines.entry.toFixed(2)} / ${lines.stop.toFixed(2)} / ${lines.target.toFixed(2)}`}
         />
       </div>
-      <button className="submit" disabled={busy || !ticker} onClick={onSubmit}>
-        {busy ? 'Submitting…' : `Submit ${side.toUpperCase()} ${ticker || ''}`}
-      </button>
+      <div className="swipe-wrap">
+        <SwipeButton
+          label={`Swipe to ${side.toUpperCase()} ${ticker || ''}`}
+          busy={busy}
+          disabled={!ticker}
+          onConfirm={onSubmit}
+        />
+      </div>
       {status && <div className="status">{status}</div>}
       {error && <div className="error">{error}</div>}
     </div>

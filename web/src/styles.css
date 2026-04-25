@@ -202,6 +202,70 @@ select {
   min-width: 0;
 }
 
+.swipe-wrap {
+  grid-column: 1 / -1;
+}
+
+.swipe-track {
+  position: relative;
+  height: 48px;
+  border-radius: 24px;
+  background: #0d1218;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+
+.swipe-track.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.swipe-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--accent);
+  transition: width 120ms ease-out;
+}
+
+.swipe-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  font-size: 14px;
+}
+
+.swipe-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #061108;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 20px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.swipe-thumb:active {
+  cursor: grabbing;
+}
+
 .submit {
   grid-column: 1 / -1;
   padding: 12px;
