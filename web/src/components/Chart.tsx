@@ -491,6 +491,15 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
       close: b.close,
       volume: b.volume,
     }));
+    // Reset Y-axis to auto-fit. Our pan/scale handlers disable auto-tick calc
+    // so the axis stays put during drag; we re-enable it here so a fresh dataset
+    // (new ticker / timeframe) gets a properly zoomed view.
+    type PrivPane = {
+      getId(): string;
+      getAxisComponent(): { setAutoCalcTickFlag(b: boolean): void };
+    };
+    const privChart = chart as unknown as { _drawPanes?: PrivPane[] };
+    privChart._drawPanes?.forEach((p) => p.getAxisComponent().setAutoCalcTickFlag(true));
     chart.applyNewData(data);
   }, [bars]);
 
