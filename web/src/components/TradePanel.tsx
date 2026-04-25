@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { submitOrder, type OrderRequest } from '../api/client';
+import { useEffect, useState } from 'react';
+import { fetchSchwabStatus, submitOrder, type OrderRequest } from '../api/client';
 import type { PriceLines } from './Chart';
 import { SwipeButton } from './SwipeButton';
 
@@ -15,6 +15,22 @@ export function TradePanel({ ticker, lines }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // null = unknown / loading; true/false = known link state.
+  const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSchwabStatus()
+      .then((s) => {
+        if (!cancelled) setSchwabLinked(s.linked);
+      })
+      .catch(() => {
+        if (!cancelled) setSchwabLinked(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const onSubmit = async () => {
     setBusy(true);
@@ -71,12 +87,18 @@ export function TradePanel({ ticker, lines }: Props) {
         />
       </div>
       <div className="swipe-wrap">
-        <SwipeButton
-          label={`Swipe to ${side.toUpperCase()} ${ticker || ''}`}
-          busy={busy}
-          disabled={!ticker}
-          onConfirm={onSubmit}
-        />
+        {broker === 'schwab' && schwabLinked === false ? (
+          <a className="connect-btn" href="/api/auth/schwab/start">
+            Connect Schwab
+          </a>
+        ) : (
+          <SwipeButton
+            label={`Swipe to ${side.toUpperCase()} ${ticker || ''}`}
+            busy={busy || schwabLinked === null}
+            disabled={!ticker}
+            onConfirm={onSubmit}
+          />
+        )}
       </div>
       {status && <div className="status">{status}</div>}
       {error && <div className="error">{error}</div>}

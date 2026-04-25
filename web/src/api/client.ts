@@ -39,3 +39,13 @@ export async function submitOrder(order: OrderRequest): Promise<{ id: string }> 
   });
   return json<{ id: string }>(res);
 }
+
+export interface SchwabStatus {
+  linked: boolean;
+  expiresAt: number | null;
+}
+
+export async function fetchSchwabStatus(): Promise<SchwabStatus> {
+  const res = await fetch('/api/auth/schwab/status');
+  return json<SchwabStatus>(res);
+}
