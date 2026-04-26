@@ -54,6 +54,31 @@ function isTreeTerminal(o: SchwabOrderSnapshot): boolean {
   return true;
 }
 
+// "Accepted" = Schwab took the order and it's healthy. This includes terminal
+// success states AND the "waiting/working" states that mean the order was
+// successfully placed and the user has nothing left to do.
+const ACCEPTED_STATUSES = new Set([
+  'FILLED',
+  'WORKING',
+  'PENDING_ACTIVATION',
+  'PENDING_ACKNOWLEDGEMENT',
+  'AWAITING_PARENT_ORDER',
+  'AWAITING_CONDITION',
+  'AWAITING_STOP_CONDITION',
+  'AWAITING_RELEASE_TIME',
+  'ACCEPTED',
+  'QUEUED',
+  'NEW',
+]);
+
+function isTreeAccepted(o: SchwabOrderSnapshot): boolean {
+  if (!ACCEPTED_STATUSES.has(o.status)) return false;
+  for (const c of o.childOrderStrategies ?? []) {
+    if (!isTreeAccepted(c)) return false;
+  }
+  return true;
+}
+
 function findRejectedChild(o: SchwabOrderSnapshot): SchwabOrderSnapshot | null {
   for (const c of o.childOrderStrategies ?? []) {
     if (c.status === 'REJECTED') return c;
@@ -116,9 +141,10 @@ function statusClass(status: string): string {
 interface Props {
   ticker: string;
   lines: PriceLines;
+  currentPrice: number | null;
 }
 
-export function TradePanel({ ticker, lines }: Props) {
+export function TradePanel({ ticker, lines, currentPrice }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
@@ -299,6 +325,7 @@ export function TradePanel({ ticker, lines }: Props) {
             stop: lines.stop,
             target: lines.target,
             accountHash: p.account.hashValue,
+            currentPrice: currentPrice ?? undefined,
           });
           setResults((prev) =>
             prev.map((r) =>
@@ -435,13 +462,19 @@ export function TradePanel({ ticker, lines }: Props) {
                     ? filled + (snap?.remainingQuantity ?? 0)
                     : null;
                 const treeDone = snap ? isTreeTerminal(snap) : false;
-                const showSpinner = r.polling && !treeDone && !r.error;
+                const treeAccepted = snap ? isTreeAccepted(snap) : false;
+                // Show the green check as soon as Schwab has accepted the order
+                // (e.g. PENDING_ACTIVATION, WORKING, FILLED). The spinner only
+                // shows when we're still polling AND the order isn't yet in a
+                // happy state.
+                const showSpinner = r.polling && !treeAccepted && !treeDone && !r.error;
+                const showCheck = treeAccepted || treeDone;
                 return (
                   <div key={r.accountNumber} className="result-block">
                     <div className="result-header">
                       <strong>{fmtAcctMask(r.accountNumber)}</strong>
                       {showSpinner && <span className="spinner" aria-label="polling" />}
-                      {treeDone && <span className="result-done">✓</span>}
+                      {showCheck && <span className="result-done">✓</span>}
                     </div>
                     {r.error ? (
                       <div className="result-line">

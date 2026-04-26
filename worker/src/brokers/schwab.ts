@@ -215,8 +215,9 @@ export async function fetchSchwabOrder(
   );
 }
 
-// Parent BUY STOP at `entry`, child OCO = SELL LIMIT @ target + SELL STOP @ stop.
-// All prices are numbers (Schwab rejects strings on the new API).
+// Parent BUY at `entry` (STOP if entry > current, LIMIT if entry <= current),
+// child OCO = SELL LIMIT @ target + SELL STOP @ stop. All prices are numbers
+// (Schwab rejects strings on the new API).
 export function buildStopBuyWithOcoOrder(input: PlaceOrderInput) {
   if (input.side !== 'buy') {
     throw new Error('only buy-side trigger→OCO is wired; sell-side not yet implemented');
@@ -232,12 +233,23 @@ export function buildStopBuyWithOcoOrder(input: PlaceOrderInput) {
   const qty = input.quantity;
   const round = (n: number) => Number(n.toFixed(2));
 
+  // If we have a live price reference and entry is at/below it, the parent is
+  // a BUY LIMIT (fills immediately or waits for a pullback). Otherwise it's a
+  // BUY STOP (waits for a breakout above the current market).
+  const useLimit =
+    typeof input.currentPrice === 'number' &&
+    input.currentPrice > 0 &&
+    input.entry <= input.currentPrice;
+
+  const parent = useLimit
+    ? { orderType: 'LIMIT', price: round(input.entry) }
+    : { orderType: 'STOP', stopPrice: round(input.entry) };
+
   return {
     orderStrategyType: 'TRIGGER',
     session: 'NORMAL',
     duration: 'DAY',
-    orderType: 'STOP',
-    stopPrice: round(input.entry),
+    ...parent,
     orderLegCollection: [
       {
         instruction: 'BUY',

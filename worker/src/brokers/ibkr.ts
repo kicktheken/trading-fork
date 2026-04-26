@@ -8,6 +8,9 @@ export interface PlaceOrderInput {
   entry: number;
   stop: number;
   target: number;
+  // Optional live price hint. When provided and entry <= currentPrice, the
+  // Schwab adapter submits a BUY LIMIT instead of a BUY STOP.
+  currentPrice?: number;
 }
 
 export interface BrokerAdapter {

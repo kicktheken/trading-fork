@@ -162,7 +162,11 @@ export function App() {
           </button>
         </div>
       </div>
-      <TradePanel ticker={ticker} lines={lines} />
+      <TradePanel
+        ticker={ticker}
+        lines={lines}
+        currentPrice={bars.length > 0 ? bars[bars.length - 1]!.close : null}
+      />
       {err && <div className="error" style={{ padding: 8 }}>{err}</div>}
     </div>
   );

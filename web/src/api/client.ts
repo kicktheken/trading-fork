@@ -16,6 +16,8 @@ export interface OrderRequest {
   stop: number;
   target: number;
   accountHash?: string;
+  // Hint to the broker adapter so it can pick LIMIT vs STOP for the parent.
+  currentPrice?: number;
 }
 
 export interface SchwabAccountSummary {

@@ -35,6 +35,7 @@ ordersRoute.post('/', async (c) => {
       entry: body.entry,
       stop: body.stop,
       target: body.target,
+      currentPrice: body.currentPrice,
     });
     return c.json(result);
   } catch (e) {
