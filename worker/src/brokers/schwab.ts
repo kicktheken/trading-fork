@@ -24,7 +24,11 @@ export function schwabAuthFor(env: Env, userSub: string): EnhancedTokenManager {
   });
 }
 
-export function schwabAdapter(env: Env): BrokerAdapter {
+export interface SchwabOrderOptions {
+  accountHash?: string;
+}
+
+export function schwabAdapter(env: Env, options: SchwabOrderOptions = {}): BrokerAdapter {
   return {
     async placeOrder(userSub, input: PlaceOrderInput) {
       const existing = await loadSchwabTokens(env, userSub);
@@ -40,7 +44,7 @@ export function schwabAdapter(env: Env): BrokerAdapter {
         throw new Error('schwab: no access token available; re-link at /api/auth/schwab/start');
       }
 
-      const accountHash = await firstAccountHash(accessToken);
+      const accountHash = options.accountHash ?? (await firstAccountHash(accessToken));
       const body = buildStopBuyWithOcoOrder(input);
 
       const res = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders`, {
@@ -76,6 +80,84 @@ async function firstAccountHash(accessToken: string): Promise<string> {
   return first.hashValue;
 }
 
+export interface SchwabAccountSummary {
+  accountNumber: string;
+  hashValue: string;
+  type: string;
+  availableFunds: number;
+  totalValue: number;
+}
+
+interface AccountNumbersEntry {
+  accountNumber: string;
+  hashValue: string;
+}
+
+interface AccountsApiEntry {
+  securitiesAccount?: {
+    type?: string;
+    accountNumber?: string;
+    currentBalances?: {
+      cashAvailableForTrading?: number;
+      buyingPower?: number;
+      liquidationValue?: number;
+      equity?: number;
+    };
+  };
+}
+
+export async function fetchSchwabAccounts(env: Env, userSub: string): Promise<SchwabAccountSummary[]> {
+  const auth = schwabAuthFor(env, userSub);
+  if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
+  const accessToken = await auth.getAccessToken();
+  if (!accessToken) throw new Error('schwab: no access token');
+
+  const headers = { authorization: `Bearer ${accessToken}`, accept: 'application/json' };
+
+  const [numbersRes, accountsRes] = await Promise.all([
+    fetch(`${TRADER_BASE}/accounts/accountNumbers`, { headers }),
+    fetch(`${TRADER_BASE}/accounts`, { headers }),
+  ]);
+  if (!numbersRes.ok) {
+    throw new Error(`schwab getAccountNumbers ${numbersRes.status}: ${await numbersRes.text()}`);
+  }
+  if (!accountsRes.ok) {
+    throw new Error(`schwab getAccounts ${accountsRes.status}: ${await accountsRes.text()}`);
+  }
+
+  const numbers = (await numbersRes.json()) as AccountNumbersEntry[];
+  const accounts = (await accountsRes.json()) as AccountsApiEntry[];
+
+  const balanceByAccount = new Map<string, { type: string; available: number; total: number }>();
+  for (const a of accounts) {
+    const sa = a.securitiesAccount;
+    if (!sa?.accountNumber) continue;
+    const balances = sa.currentBalances ?? {};
+    // For cash accounts use cashAvailableForTrading; for margin, buyingPower.
+    const available =
+      balances.cashAvailableForTrading ??
+      balances.buyingPower ??
+      0;
+    const total = balances.liquidationValue ?? balances.equity ?? 0;
+    balanceByAccount.set(sa.accountNumber, {
+      type: sa.type ?? 'UNKNOWN',
+      available,
+      total,
+    });
+  }
+
+  return numbers.map((n) => {
+    const b = balanceByAccount.get(n.accountNumber);
+    return {
+      accountNumber: n.accountNumber,
+      hashValue: n.hashValue,
+      type: b?.type ?? 'UNKNOWN',
+      availableFunds: b?.available ?? 0,
+      totalValue: b?.total ?? 0,
+    };
+  });
+}
+
 export interface SchwabOrderSnapshot {
   orderId: string;
   status: string;
@@ -90,24 +172,51 @@ export async function fetchSchwabOrder(
   env: Env,
   userSub: string,
   orderId: string,
+  accountHash?: string,
 ): Promise<SchwabOrderSnapshot> {
   const auth = schwabAuthFor(env, userSub);
   if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
   const accessToken = await auth.getAccessToken();
   if (!accessToken) throw new Error('schwab: no access token');
 
-  const accountHash = await firstAccountHash(accessToken);
-  const res = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+  // If the caller knows which account the order lives on, use that. Otherwise
+  // fall back to scanning all accounts (Schwab orderIds are unique per account
+  // and 404 on accounts that don't own them).
+  if (accountHash) {
+    const res = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    });
+    if (!res.ok) {
+      throw new Error(`schwab getOrder ${res.status}: ${await res.text()}`);
+    }
+    return (await res.json()) as SchwabOrderSnapshot;
+  }
+
+  // No accountHash specified — try each account until one returns the order.
+  const numbersRes = await fetch(`${TRADER_BASE}/accounts/accountNumbers`, {
     headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
   });
-  if (!res.ok) {
-    throw new Error(`schwab getOrder ${res.status}: ${await res.text()}`);
+  if (!numbersRes.ok) {
+    throw new Error(`schwab getAccountNumbers ${numbersRes.status}: ${await numbersRes.text()}`);
   }
-  return (await res.json()) as SchwabOrderSnapshot;
+  const accounts = (await numbersRes.json()) as Array<{ hashValue: string }>;
+  let lastErr = '';
+  for (const a of accounts) {
+    const res = await fetch(`${TRADER_BASE}/accounts/${a.hashValue}/orders/${orderId}`, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    });
+    if (res.ok) return (await res.json()) as SchwabOrderSnapshot;
+    if (res.status !== 404) {
+      lastErr = `${res.status}: ${await res.text()}`;
+    }
+  }
+  throw new Error(
+    lastErr ? `schwab getOrder failed across accounts: ${lastErr}` : `schwab getOrder: order ${orderId} not found in any account`,
+  );
 }
 
 // Parent BUY STOP at `entry`, child OCO = SELL LIMIT @ target + SELL STOP @ stop.
-// 1-share for now. All prices are numbers (Schwab rejects strings on the new API).
+// All prices are numbers (Schwab rejects strings on the new API).
 export function buildStopBuyWithOcoOrder(input: PlaceOrderInput) {
   if (input.side !== 'buy') {
     throw new Error('only buy-side trigger→OCO is wired; sell-side not yet implemented');
@@ -115,9 +224,12 @@ export function buildStopBuyWithOcoOrder(input: PlaceOrderInput) {
   if (!(input.stop < input.entry && input.entry < input.target)) {
     throw new Error('expected stop < entry < target for a buy trigger→OCO');
   }
+  if (!Number.isInteger(input.quantity) || input.quantity < 1) {
+    throw new Error(`quantity must be a positive integer, got ${input.quantity}`);
+  }
 
   const symbol = input.ticker;
-  const qty = 1;
+  const qty = input.quantity;
   const round = (n: number) => Number(n.toFixed(2));
 
   return {

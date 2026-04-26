@@ -5,6 +5,7 @@ import { barsRoute } from './routes/bars';
 import { authIbkrRoute } from './routes/auth-ibkr';
 import { authSchwabRoute } from './routes/auth-schwab';
 import { ordersRoute } from './routes/orders';
+import { accountsRoute } from './routes/accounts';
 
 const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
@@ -15,6 +16,7 @@ app.route('/api/bars', barsRoute);
 app.route('/api/auth/ibkr', authIbkrRoute);
 app.route('/api/auth/schwab', authSchwabRoute);
 app.route('/api/orders', ordersRoute);
+app.route('/api/accounts', accountsRoute);
 
 // Fallback to the SPA assets for any non-API route.
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));

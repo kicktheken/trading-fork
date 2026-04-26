@@ -7,6 +7,7 @@ export const ordersRoute = new Hono<{ Bindings: Env; Variables: AppVariables }>(
 
 interface OrderBody extends PlaceOrderInput {
   broker: 'ibkr' | 'schwab';
+  accountHash?: string;
 }
 
 ordersRoute.post('/', async (c) => {
@@ -21,7 +22,10 @@ ordersRoute.post('/', async (c) => {
   if (err) return c.json({ error: err }, 400);
 
   const identity = c.get('identity');
-  const adapter = body.broker === 'ibkr' ? ibkrAdapter(c.env) : schwabAdapter(c.env);
+  const adapter =
+    body.broker === 'ibkr'
+      ? ibkrAdapter(c.env)
+      : schwabAdapter(c.env, body.accountHash ? { accountHash: body.accountHash } : {});
 
   try {
     const result = await adapter.placeOrder(identity.sub, {
@@ -46,9 +50,10 @@ ordersRoute.get('/:broker/:id', async (c) => {
   }
   if (!/^\d+$/.test(id)) return c.json({ error: 'invalid order id' }, 400);
 
+  const accountHash = c.req.query('accountHash') ?? undefined;
   const identity = c.get('identity');
   try {
-    const order = await fetchSchwabOrder(c.env, identity.sub, id);
+    const order = await fetchSchwabOrder(c.env, identity.sub, id, accountHash);
     return c.json(order);
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);

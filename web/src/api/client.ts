@@ -15,6 +15,21 @@ export interface OrderRequest {
   entry: number;
   stop: number;
   target: number;
+  accountHash?: string;
+}
+
+export interface SchwabAccountSummary {
+  accountNumber: string;
+  hashValue: string;
+  type: string;
+  availableFunds: number;
+  totalValue: number;
+}
+
+export async function fetchSchwabAccounts(): Promise<SchwabAccountSummary[]> {
+  const res = await fetch('/api/accounts/schwab');
+  const data = await json<{ accounts: SchwabAccountSummary[] }>(res);
+  return data.accounts;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -63,7 +78,9 @@ export interface SchwabOrderSnapshot {
 export async function fetchOrder(
   broker: 'schwab',
   orderId: string,
+  accountHash?: string,
 ): Promise<SchwabOrderSnapshot> {
-  const res = await fetch(`/api/orders/${broker}/${encodeURIComponent(orderId)}`);
+  const qs = accountHash ? `?accountHash=${encodeURIComponent(accountHash)}` : '';
+  const res = await fetch(`/api/orders/${broker}/${encodeURIComponent(orderId)}${qs}`);
   return json<SchwabOrderSnapshot>(res);
 }

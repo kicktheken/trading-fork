@@ -1,17 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   fetchOrder,
+  fetchSchwabAccounts,
   fetchSchwabStatus,
   submitOrder,
-  type OrderRequest,
+  type SchwabAccountSummary,
   type SchwabOrderSnapshot,
 } from '../api/client';
 import type { PriceLines } from './Chart';
 import { SwipeButton } from './SwipeButton';
 
-// Schwab order statuses that are "done" — no further updates expected for
-// THIS orderId. (REPLACED is terminal for this id; a new id is issued.)
 const TERMINAL_STATUSES = new Set([
   'FILLED',
   'CANCELED',
@@ -20,9 +19,33 @@ const TERMINAL_STATUSES = new Set([
   'REPLACED',
 ]);
 
-// Recursively check whether an order tree is fully settled — parent is terminal
-// AND every child is terminal. We keep polling past parent FILL because OCO
-// children stay WORKING until one fills/cancels the other.
+const ALLOC_STORAGE_KEY = 'trading-fork:schwab-allocations';
+
+interface AllocationRecord {
+  // accountNumber -> { dollars: string, enabled: bool }
+  [accountNumber: string]: { dollars: string; enabled: boolean };
+}
+
+function loadAllocations(): AllocationRecord {
+  try {
+    const raw = localStorage.getItem(ALLOC_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as AllocationRecord;
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+function saveAllocations(allocs: AllocationRecord) {
+  try {
+    localStorage.setItem(ALLOC_STORAGE_KEY, JSON.stringify(allocs));
+  } catch {
+    // ignore
+  }
+}
+
 function isTreeTerminal(o: SchwabOrderSnapshot): boolean {
   if (!TERMINAL_STATUSES.has(o.status)) return false;
   for (const c of o.childOrderStrategies ?? []) {
@@ -31,7 +54,6 @@ function isTreeTerminal(o: SchwabOrderSnapshot): boolean {
   return true;
 }
 
-// Walk the tree and return the first child with a REJECTED state, if any.
 function findRejectedChild(o: SchwabOrderSnapshot): SchwabOrderSnapshot | null {
   for (const c of o.childOrderStrategies ?? []) {
     if (c.status === 'REJECTED') return c;
@@ -41,8 +63,6 @@ function findRejectedChild(o: SchwabOrderSnapshot): SchwabOrderSnapshot | null {
   return null;
 }
 
-// Flatten the bracket: parent's children are an OCO group whose children are
-// the actual leg orders (LIMIT take-profit + STOP stop-loss).
 function flattenChildren(o: SchwabOrderSnapshot): SchwabOrderSnapshot[] {
   const out: SchwabOrderSnapshot[] = [];
   for (const c of o.childOrderStrategies ?? []) {
@@ -56,14 +76,41 @@ function flattenChildren(o: SchwabOrderSnapshot): SchwabOrderSnapshot[] {
 }
 
 function childLabel(_c: SchwabOrderSnapshot, i: number): string {
-  // We submit the OCO with [LIMIT (target), STOP (stop-loss)] in that order.
   return i === 0 ? 'Target' : i === 1 ? 'Stop' : `Leg ${i + 1}`;
 }
 
-function childLabelFor(child: SchwabOrderSnapshot, root: SchwabOrderSnapshot): string {
-  const flat = flattenChildren(root);
-  const idx = flat.findIndex((x) => x.orderId === child.orderId);
-  return idx >= 0 ? childLabel(child, idx) : 'child order';
+function fmtMoney(n: number): string {
+  return n.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  });
+}
+
+function fmtAcctMask(num: string): string {
+  return num.length > 4 ? `••••${num.slice(-4)}` : num;
+}
+
+interface AccountResult {
+  accountNumber: string;
+  accountHash: string;
+  ok: boolean;
+  orderId?: string;
+  error?: string;
+  snapshot?: SchwabOrderSnapshot;
+  polling?: boolean;
+}
+
+function statusClass(status: string): string {
+  if (status === 'FILLED') return 'st st-filled';
+  if (status === 'WORKING' || status === 'PENDING_ACTIVATION' || status === 'ACCEPTED') {
+    return 'st st-working';
+  }
+  if (status === 'AWAITING_PARENT_ORDER') return 'st st-waiting';
+  if (status === 'REJECTED' || status === 'CANCELED' || status === 'EXPIRED') {
+    return 'st st-bad';
+  }
+  return 'st';
 }
 
 interface Props {
@@ -72,24 +119,38 @@ interface Props {
 }
 
 export function TradePanel({ ticker, lines }: Props) {
-  const [broker, setBroker] = useState<OrderRequest['broker']>('schwab');
-  const [side, setSide] = useState<OrderRequest['side']>('buy');
-  const [quantity, setQuantity] = useState(1);
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // null = unknown / loading; true/false = known link state.
+  const [error, setError] = useState<string | null>(null);
   const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
-  const [orderSnapshot, setOrderSnapshot] = useState<SchwabOrderSnapshot | null>(null);
-  const pollTimer = useRef<number | null>(null);
-  // Generation counter — incrementing it cancels any in-flight or scheduled polls.
+  const [accounts, setAccounts] = useState<SchwabAccountSummary[] | null>(null);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [allocations, setAllocations] = useState<AllocationRecord>(loadAllocations);
+  const [results, setResults] = useState<AccountResult[]>([]);
+
+  const pollTimers = useRef<Map<string, number>>(new Map());
   const pollGen = useRef(0);
 
+  // Persist allocations on every change.
+  useEffect(() => {
+    saveAllocations(allocations);
+  }, [allocations]);
+
+  // Load schwab status + accounts on mount.
   useEffect(() => {
     let cancelled = false;
     fetchSchwabStatus()
       .then((s) => {
-        if (!cancelled) setSchwabLinked(s.linked);
+        if (cancelled) return;
+        setSchwabLinked(s.linked);
+        if (s.linked) {
+          fetchSchwabAccounts()
+            .then((accts) => {
+              if (!cancelled) setAccounts(accts);
+            })
+            .catch((e) => {
+              if (!cancelled) setAccountsError(e instanceof Error ? e.message : String(e));
+            });
+        }
       })
       .catch(() => {
         if (!cancelled) setSchwabLinked(false);
@@ -99,154 +160,266 @@ export function TradePanel({ ticker, lines }: Props) {
     };
   }, []);
 
-  // Stop any in-flight polling on unmount.
+  // Cancel polling on unmount.
   useEffect(
     () => () => {
-      if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+      stopAllPolling();
     },
     [],
   );
 
-  const stopPolling = () => {
-    if (pollTimer.current !== null) {
-      window.clearTimeout(pollTimer.current);
-      pollTimer.current = null;
+  const stopAllPolling = () => {
+    for (const id of pollTimers.current.values()) {
+      window.clearTimeout(id);
     }
+    pollTimers.current.clear();
     pollGen.current++;
   };
 
-  const startPolling = (orderId: string) => {
-    if (broker !== 'schwab') return;
-    if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
-    const myGen = ++pollGen.current;
+  const setPolling = (accountNumber: string, polling: boolean) => {
+    setResults((prev) =>
+      prev.map((r) => (r.accountNumber === accountNumber ? { ...r, polling } : r)),
+    );
+  };
+
+  const startPollingFor = (accountNumber: string, accountHash: string, orderId: string) => {
+    const myGen = pollGen.current;
     let attempt = 0;
     let currentId = orderId;
     let firstFetchSucceeded = false;
+    setPolling(accountNumber, true);
     const tick = async () => {
-      // Bail out if a newer generation has been started or polling was stopped.
       if (myGen !== pollGen.current) return;
       attempt++;
       try {
-        const snap = await fetchOrder('schwab', currentId);
+        const snap = await fetchOrder('schwab', currentId, accountHash);
         if (myGen !== pollGen.current) return;
         firstFetchSucceeded = true;
-        setOrderSnapshot(snap);
-
-        // If a child rejected (e.g. the OCO bracket failed validation post-fill),
-        // surface Schwab's reason prominently — the parent buy may have filled,
-        // but the protective stop/target won't be in place.
+        setResults((prev) =>
+          prev.map((r) => (r.accountNumber === accountNumber ? { ...r, snapshot: snap } : r)),
+        );
         const rejected = findRejectedChild(snap);
         if (rejected) {
           const reason = rejected.statusDescription?.trim();
+          const acct = fmtAcctMask(accountNumber);
           setError(
             reason
-              ? `Schwab rejected ${childLabelFor(rejected, snap)}: ${reason}`
-              : `Schwab rejected ${childLabelFor(rejected, snap)}. Review your account.`,
+              ? `${acct} rejected ${childLabel(rejected, 0)}: ${reason}`
+              : `${acct} rejected child order. Review your account.`,
           );
-        } else if (snap.status === 'REJECTED' && snap.statusDescription) {
-          setError(`Schwab rejected order: ${snap.statusDescription}`);
         }
-
-        // Follow REPLACED orders to the new id.
         if (snap.status === 'REPLACED' && snap.childOrderStrategies?.[0]?.orderId) {
           currentId = snap.childOrderStrategies[0].orderId;
         } else if (isTreeTerminal(snap)) {
+          setPolling(accountNumber, false);
+          pollTimers.current.delete(accountNumber);
           return;
         }
       } catch (e) {
-        // First poll commonly 404s while Schwab finishes propagating the order
-        // to its read API. Retry transiently for the first few attempts.
         const transient = !firstFetchSucceeded && attempt <= 3;
         if (!transient) {
-          setError(`status poll failed: ${e instanceof Error ? e.message : String(e)}`);
+          setError(
+            `${fmtAcctMask(accountNumber)} status poll failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+          setPolling(accountNumber, false);
+          pollTimers.current.delete(accountNumber);
           return;
         }
       }
-      // Cap polling at ~5 minutes total.
-      if (attempt > 60) return;
+      if (attempt > 60) {
+        setPolling(accountNumber, false);
+        pollTimers.current.delete(accountNumber);
+        return;
+      }
       const delay = attempt < 15 ? 2000 : 10000;
-      pollTimer.current = window.setTimeout(tick, delay);
+      const tid = window.setTimeout(tick, delay);
+      pollTimers.current.set(accountNumber, tid);
     };
-    // Schwab's POST → GET propagation time isn't published. 300ms is usually
-    // enough but occasionally the first poll 404s; we retry up to 3 times.
-    pollTimer.current = window.setTimeout(tick, 300);
+    const tid = window.setTimeout(tick, 300);
+    pollTimers.current.set(accountNumber, tid);
   };
+
+  const setAlloc = (accountNumber: string, patch: Partial<AllocationRecord[string]>) => {
+    setAllocations((prev) => ({
+      ...prev,
+      [accountNumber]: {
+        dollars: prev[accountNumber]?.dollars ?? '',
+        enabled: prev[accountNumber]?.enabled ?? false,
+        ...patch,
+      },
+    }));
+  };
+
+  // Compute per-account quantity given the entry price and dollar amount.
+  const planned = useMemo(() => {
+    if (!accounts || lines.entry <= 0) return [];
+    return accounts.map((a) => {
+      const alloc = allocations[a.accountNumber];
+      const dollars = Number(alloc?.dollars ?? '');
+      const enabled = !!alloc?.enabled;
+      const qty = enabled && Number.isFinite(dollars) && dollars > 0
+        ? Math.floor(dollars / lines.entry)
+        : 0;
+      return { account: a, dollars, enabled, qty };
+    });
+  }, [accounts, allocations, lines.entry]);
+
+  const ordersToSubmit = planned.filter((p) => p.enabled && p.qty > 0);
+  const canSubmit =
+    !!ticker &&
+    schwabLinked === true &&
+    ordersToSubmit.length > 0 &&
+    lines.stop < lines.entry &&
+    lines.entry < lines.target;
 
   const onSubmit = async () => {
     setBusy(true);
     setError(null);
-    setStatus(null);
-    setOrderSnapshot(null);
-    try {
-      const res = await submitOrder({
-        broker,
-        ticker,
-        side,
-        quantity,
-        entry: lines.entry,
-        stop: lines.stop,
-        target: lines.target,
-      });
-      setStatus(`Submitted: ${res.id}`);
-      // Schwab order ids are numeric; our worker falls back to "schwab:<ts>"
-      // when the Location header is missing — only poll real ids.
-      if (broker === 'schwab' && /^\d+$/.test(res.id)) {
-        startPolling(res.id);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    setResults([]);
+    stopAllPolling();
+
+    const initial: AccountResult[] = ordersToSubmit.map((p) => ({
+      accountNumber: p.account.accountNumber,
+      accountHash: p.account.hashValue,
+      ok: false,
+    }));
+    setResults(initial);
+
+    await Promise.all(
+      ordersToSubmit.map(async (p) => {
+        try {
+          const res = await submitOrder({
+            broker: 'schwab',
+            ticker,
+            side: 'buy',
+            quantity: p.qty,
+            entry: lines.entry,
+            stop: lines.stop,
+            target: lines.target,
+            accountHash: p.account.hashValue,
+          });
+          setResults((prev) =>
+            prev.map((r) =>
+              r.accountNumber === p.account.accountNumber
+                ? { ...r, ok: true, orderId: res.id }
+                : r,
+            ),
+          );
+          if (/^\d+$/.test(res.id)) {
+            startPollingFor(p.account.accountNumber, p.account.hashValue, res.id);
+          }
+        } catch (e) {
+          setResults((prev) =>
+            prev.map((r) =>
+              r.accountNumber === p.account.accountNumber
+                ? { ...r, ok: false, error: e instanceof Error ? e.message : String(e) }
+                : r,
+            ),
+          );
+        }
+      }),
+    );
+
+    setBusy(false);
   };
+
+  const dismissBanner = () => {
+    stopAllPolling();
+    setError(null);
+    setResults([]);
+  };
+
+  const showBanner = error || results.length > 0;
 
   return (
     <div className="trade-panel">
-      <div>
-        <label>Broker</label>
-        <select value={broker} onChange={(e) => setBroker(e.target.value as OrderRequest['broker'])}>
-          <option value="schwab">Schwab</option>
-          <option value="ibkr">Interactive Brokers</option>
-        </select>
-      </div>
-      <div>
-        <label>Side</label>
-        <select value={side} onChange={(e) => setSide(e.target.value as OrderRequest['side'])}>
-          <option value="buy">Buy</option>
-          <option value="sell">Sell</option>
-        </select>
-      </div>
-      <div>
-        <label>Qty</label>
-        <input
-          type="number"
-          min={1}
-          value={quantity}
-          onChange={(e) => setQuantity(Math.max(1, Number(e.target.value) || 1))}
-        />
-      </div>
-      <div>
-        <label>Entry / Stop / Target</label>
-        <input
-          readOnly
-          value={`${lines.entry.toFixed(2)} / ${lines.stop.toFixed(2)} / ${lines.target.toFixed(2)}`}
-        />
-      </div>
-      <div className="swipe-wrap">
-        {broker === 'schwab' && schwabLinked === false ? (
+      {schwabLinked === false ? (
+        <div className="trade-panel-row">
           <a className="connect-btn" href="/api/auth/schwab/start">
             Connect Schwab
           </a>
-        ) : (
-          <SwipeButton
-            label={`Swipe to ${side.toUpperCase()} ${ticker || ''}`}
-            busy={busy || schwabLinked === null}
-            disabled={!ticker}
-            onConfirm={onSubmit}
-          />
-        )}
-      </div>
-      {(status || orderSnapshot || error) &&
+        </div>
+      ) : (
+        <>
+          <div className="trade-panel-row">
+            {accountsError ? (
+              <div className="error-text">{accountsError}</div>
+            ) : !accounts ? (
+              <div className="muted-text">Loading accounts…</div>
+            ) : accounts.length === 0 ? (
+              <div className="muted-text">No Schwab accounts found.</div>
+            ) : (
+              <div className="account-list">
+                {accounts.map((a) => {
+                  const alloc = allocations[a.accountNumber] ?? { dollars: '', enabled: false };
+                  const dollars = Number(alloc.dollars);
+                  const pct =
+                    a.totalValue > 0 && Number.isFinite(dollars) && dollars > 0
+                      ? (dollars / a.totalValue) * 100
+                      : 0;
+                  const qty =
+                    alloc.enabled &&
+                    Number.isFinite(dollars) &&
+                    dollars > 0 &&
+                    lines.entry > 0
+                      ? Math.floor(dollars / lines.entry)
+                      : 0;
+                  return (
+                    <div className="account-row" key={a.accountNumber}>
+                      <label className="account-check">
+                        <input
+                          type="checkbox"
+                          checked={alloc.enabled}
+                          onChange={(e) => setAlloc(a.accountNumber, { enabled: e.target.checked })}
+                        />
+                        <span className="account-name">{fmtAcctMask(a.accountNumber)}</span>
+                      </label>
+                      <div className="account-balance">
+                        <span>{fmtMoney(a.availableFunds)}</span>
+                        <span className="muted-text">{fmtMoney(a.totalValue)}</span>
+                      </div>
+                      <div className="account-meta">
+                        <span className="muted-text">{pct > 0 ? `${pct.toFixed(1)}%` : '—'}</span>
+                        <span className="muted-text">{qty > 0 ? `${qty} sh` : ''}</span>
+                      </div>
+                      <div className="account-amount">
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          step={50}
+                          placeholder="$"
+                          value={alloc.dollars}
+                          onChange={(e) => setAlloc(a.accountNumber, { dollars: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="trade-panel-row">
+            <SwipeButton
+              label={
+                ordersToSubmit.length === 0
+                  ? `Set qty on at least one account`
+                  : `Swipe to BUY ${ticker} (${ordersToSubmit.length} acct${
+                      ordersToSubmit.length > 1 ? 's' : ''
+                    })`
+              }
+              busy={busy || schwabLinked === null || accounts === null}
+              disabled={!canSubmit}
+              onConfirm={onSubmit}
+            />
+          </div>
+        </>
+      )}
+
+      {showBanner &&
         createPortal(
           <div
             className={`top-banner${error ? ' top-banner-error' : ''}`}
@@ -254,42 +427,68 @@ export function TradePanel({ ticker, lines }: Props) {
           >
             <div className="top-banner-body">
               {error && <div className="top-banner-line">{error}</div>}
-              {status && <div className="top-banner-line">{status}</div>}
-              {orderSnapshot && (
-                <>
-                  <div className="top-banner-line">
-                    Parent: <strong>{orderSnapshot.status}</strong>
-                    {typeof orderSnapshot.filledQuantity === 'number' && (
+              {results.map((r) => {
+                const snap = r.snapshot;
+                const filled = snap?.filledQuantity;
+                const total =
+                  typeof filled === 'number'
+                    ? filled + (snap?.remainingQuantity ?? 0)
+                    : null;
+                const treeDone = snap ? isTreeTerminal(snap) : false;
+                const showSpinner = r.polling && !treeDone && !r.error;
+                return (
+                  <div key={r.accountNumber} className="result-block">
+                    <div className="result-header">
+                      <strong>{fmtAcctMask(r.accountNumber)}</strong>
+                      {showSpinner && <span className="spinner" aria-label="polling" />}
+                      {treeDone && <span className="result-done">✓</span>}
+                    </div>
+                    {r.error ? (
+                      <div className="result-line">
+                        <span className="st st-bad">ERROR</span> {r.error}
+                      </div>
+                    ) : snap ? (
                       <>
-                        {' '}· filled {orderSnapshot.filledQuantity}/
-                        {orderSnapshot.filledQuantity + (orderSnapshot.remainingQuantity ?? 0)}
+                        <div className="result-line">
+                          <span className="result-label">Parent</span>
+                          <span className={statusClass(snap.status)}>{snap.status}</span>
+                          {typeof filled === 'number' && total !== null && (
+                            <span className="muted-text">
+                              {filled}/{total}
+                            </span>
+                          )}
+                          {snap.statusDescription && (
+                            <span className="status-detail">{snap.statusDescription}</span>
+                          )}
+                        </div>
+                        {flattenChildren(snap).map((c, i) => (
+                          <div key={c.orderId ?? i} className="result-line">
+                            <span className="result-label">{childLabel(c, i)}</span>
+                            <span className={statusClass(c.status)}>{c.status}</span>
+                            {c.statusDescription && (
+                              <span className="status-detail">{c.statusDescription}</span>
+                            )}
+                          </div>
+                        ))}
                       </>
-                    )}
-                    {orderSnapshot.statusDescription && (
-                      <div className="status-detail">{orderSnapshot.statusDescription}</div>
+                    ) : r.orderId ? (
+                      <div className="result-line">
+                        <span className="muted-text">submitted ({r.orderId}), waiting…</span>
+                      </div>
+                    ) : (
+                      <div className="result-line">
+                        <span className="muted-text">submitting…</span>
+                      </div>
                     )}
                   </div>
-                  {flattenChildren(orderSnapshot).map((c, i) => (
-                    <div key={c.orderId ?? i} className="top-banner-line">
-                      {childLabel(c, i)}: <strong>{c.status}</strong>
-                      {c.statusDescription && (
-                        <div className="status-detail">{c.statusDescription}</div>
-                      )}
-                    </div>
-                  ))}
-                </>
-              )}
+                );
+              })}
             </div>
             <button
               type="button"
               className="top-banner-close"
               aria-label="Dismiss"
-              onClick={() => {
-                stopPolling();
-                setError(null);
-                setStatus(null);
-                setOrderSnapshot(null);
-              }}
+              onClick={dismissBanner}
             >
               ×
             </button>

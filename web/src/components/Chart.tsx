@@ -301,6 +301,14 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
     // Explicitly enable Y-axis scroll/zoom on both panes after they exist.
     chart?.setPaneOptions({ id: 'candle_pane', axisOptions: { scrollZoomEnabled: true } });
 
+    // KlineCharts sizes its internal canvases to the container size at init time
+    // and doesn't re-measure on its own. Watch for any container resize (e.g.
+    // the trade panel growing once accounts load) and tell the chart to resize.
+    const resizeObserver = new ResizeObserver(() => {
+      chartRef.current?.resize();
+    });
+    resizeObserver.observe(elRef.current);
+
     // iOS Safari fires WebKit-specific gesture* events for 2-finger gestures,
     // which trigger native page zoom unless we preventDefault. We only block
     // when 2+ touches are active so single-finger drags still reach KlineCharts.
@@ -467,6 +475,7 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
     el.addEventListener('gestureend', onGesture);
 
     return () => {
+      resizeObserver.disconnect();
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
