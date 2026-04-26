@@ -61,7 +61,11 @@ export async function fetchQuote(ticker: string): Promise<Quote> {
 }
 
 export async function submitOrder(order: OrderRequest): Promise<{ id: string }> {
-  const res = await fetch('/api/orders', {
+  // Forward ?rtFmt= from the page URL so we can A/B-test releaseTime serialization
+  // without touching the deployed code.
+  const pageRtFmt = new URLSearchParams(window.location.search).get('rtFmt');
+  const qs = pageRtFmt ? `?rtFmt=${encodeURIComponent(pageRtFmt)}` : '';
+  const res = await fetch(`/api/orders${qs}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(order),
@@ -86,6 +90,8 @@ export interface SchwabOrderSnapshot {
   enteredTime?: string;
   filledQuantity?: number;
   remainingQuantity?: number;
+  orderType?: string;
+  orderStrategyType?: string;
   childOrderStrategies?: SchwabOrderSnapshot[];
 }
 
@@ -97,4 +103,15 @@ export async function fetchOrder(
   const qs = accountHash ? `?accountHash=${encodeURIComponent(accountHash)}` : '';
   const res = await fetch(`/api/orders/${broker}/${encodeURIComponent(orderId)}${qs}`);
   return json<SchwabOrderSnapshot>(res);
+}
+
+export async function fetchActiveOrdersForTicker(
+  accountHash: string,
+  ticker: string,
+): Promise<SchwabOrderSnapshot[]> {
+  const res = await fetch(
+    `/api/orders/schwab/active?accountHash=${encodeURIComponent(accountHash)}&ticker=${encodeURIComponent(ticker)}`,
+  );
+  const data = await json<{ orders: SchwabOrderSnapshot[] }>(res);
+  return data.orders;
 }

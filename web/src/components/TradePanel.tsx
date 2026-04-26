@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  fetchActiveOrdersForTicker,
   fetchOrder,
   fetchSchwabAccounts,
   fetchSchwabStatus,
@@ -88,6 +89,10 @@ function findRejectedChild(o: SchwabOrderSnapshot): SchwabOrderSnapshot | null {
   return null;
 }
 
+// REPLACED legs accumulate as history when the user edits an OCO via TOS —
+// they're terminal versions of the live order and shouldn't be shown.
+const HIDE_FROM_DISPLAY = new Set(['REPLACED']);
+
 function flattenChildren(o: SchwabOrderSnapshot): SchwabOrderSnapshot[] {
   const out: SchwabOrderSnapshot[] = [];
   for (const c of o.childOrderStrategies ?? []) {
@@ -97,10 +102,16 @@ function flattenChildren(o: SchwabOrderSnapshot): SchwabOrderSnapshot[] {
       out.push(c);
     }
   }
-  return out;
+  return out.filter((c) => !HIDE_FROM_DISPLAY.has(c.status));
 }
 
-function childLabel(_c: SchwabOrderSnapshot, i: number): string {
+function childLabel(c: SchwabOrderSnapshot, i: number): string {
+  // Label by order type: LIMIT = take-profit Target, STOP/STOP_LIMIT = Stop.
+  // Falls back to position index if orderType is missing for any reason.
+  if (c.orderType === 'LIMIT') return 'Target';
+  if (c.orderType === 'STOP' || c.orderType === 'STOP_LIMIT' || c.orderType === 'TRAILING_STOP') {
+    return 'Stop';
+  }
   return i === 0 ? 'Target' : i === 1 ? 'Stop' : `Leg ${i + 1}`;
 }
 
@@ -152,6 +163,10 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [allocations, setAllocations] = useState<AllocationRecord>(loadAllocations);
   const [results, setResults] = useState<AccountResult[]>([]);
+  // accountNumber -> count of active orders matching the current ticker.
+  const [activeCounts, setActiveCounts] = useState<Record<string, number>>({});
+  // accountNumber -> active orders cache (so the click handler can show without a refetch).
+  const activeOrdersCache = useRef<Record<string, SchwabOrderSnapshot[]>>({});
 
   const pollTimers = useRef<Map<string, number>>(new Map());
   const pollGen = useRef(0);
@@ -193,6 +208,55 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
     },
     [],
   );
+
+  // Refresh per-account active-order counts when accounts or ticker change.
+  useEffect(() => {
+    if (!accounts || !ticker) {
+      setActiveCounts({});
+      activeOrdersCache.current = {};
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      accounts.map(async (a) => {
+        try {
+          const orders = await fetchActiveOrdersForTicker(a.hashValue, ticker);
+          return { acctNum: a.accountNumber, orders };
+        } catch {
+          return { acctNum: a.accountNumber, orders: [] as SchwabOrderSnapshot[] };
+        }
+      }),
+    ).then((rows) => {
+      if (cancelled) return;
+      const counts: Record<string, number> = {};
+      const cache: Record<string, SchwabOrderSnapshot[]> = {};
+      for (const r of rows) {
+        counts[r.acctNum] = r.orders.length;
+        cache[r.acctNum] = r.orders;
+      }
+      setActiveCounts(counts);
+      activeOrdersCache.current = cache;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts, ticker]);
+
+  const showActiveOrdersFor = (account: SchwabAccountSummary) => {
+    const cached = activeOrdersCache.current[account.accountNumber] ?? [];
+    stopAllPolling();
+    setError(null);
+    setResults(
+      cached.map((snap) => ({
+        accountNumber: account.accountNumber,
+        accountHash: account.hashValue,
+        ok: true,
+        orderId: snap.orderId,
+        snapshot: snap,
+        polling: false,
+      })),
+    );
+  };
 
   const stopAllPolling = () => {
     for (const id of pollTimers.current.values()) {
@@ -393,6 +457,7 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
                     lines.entry > 0
                       ? Math.floor(dollars / lines.entry)
                       : 0;
+                  const activeCount = activeCounts[a.accountNumber] ?? 0;
                   return (
                     <div className="account-row" key={a.accountNumber}>
                       <label className="account-check">
@@ -402,6 +467,19 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
                           onChange={(e) => setAlloc(a.accountNumber, { enabled: e.target.checked })}
                         />
                         <span className="account-name">{fmtAcctMask(a.accountNumber)}</span>
+                        {activeCount > 0 && (
+                          <button
+                            type="button"
+                            className="active-badge"
+                            title={`${activeCount} active ${ticker} order${activeCount > 1 ? 's' : ''}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              showActiveOrdersFor(a);
+                            }}
+                          >
+                            {activeCount}
+                          </button>
+                        )}
                       </label>
                       <div className="account-balance">
                         <span>{fmtMoney(a.availableFunds)}</span>

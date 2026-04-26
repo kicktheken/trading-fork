@@ -27,7 +27,11 @@
       "Bash(npm view *)",
       "WebFetch(domain:medium.com)",
       "WebFetch(domain:tda-api.readthedocs.io)",
-      "WebFetch(domain:gist.github.com)"
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:archive.org)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:search.r-project.org)"
     ]
   }
 }

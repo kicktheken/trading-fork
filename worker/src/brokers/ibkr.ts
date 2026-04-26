@@ -11,6 +11,9 @@ export interface PlaceOrderInput {
   // Optional live price hint. When provided and entry <= currentPrice, the
   // Schwab adapter submits a BUY LIMIT instead of a BUY STOP.
   currentPrice?: number;
+  // For Schwab BUY STOP only: pick the releaseTime serialization to test which
+  // format Schwab actually honors. Default is plain ISO with Z suffix.
+  releaseTimeFormat?: 'z' | 'offset' | 'naive';
 }
 
 export interface BrokerAdapter {
