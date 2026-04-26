@@ -92,7 +92,21 @@ export interface SchwabOrderSnapshot {
   remainingQuantity?: number;
   orderType?: string;
   orderStrategyType?: string;
+  // Price/stopPrice/legs are populated for actual order leaves; absent on
+  // grouping nodes like OCO. Adapters echo what Schwab returns verbatim.
+  price?: number;
+  stopPrice?: number;
+  orderLegCollection?: Array<{
+    instruction?: string;
+    instrument?: { symbol?: string };
+  }>;
   childOrderStrategies?: SchwabOrderSnapshot[];
+}
+
+export interface ExistingOrderLevels {
+  entries: number[];
+  stops: number[];
+  targets: number[];
 }
 
 export async function fetchOrder(

@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Chart, type PriceLines } from './components/Chart';
 import { TradePanel } from './components/TradePanel';
-import { fetchBars, fetchQuote, type Bar } from './api/client';
+import {
+  fetchBars,
+  fetchQuote,
+  type Bar,
+  type ExistingOrderLevels,
+} from './api/client';
 import { ema, pctChangeOverLookback } from './lib/ema';
 import { aggregate, type Timeframe } from './lib/aggregate';
 
@@ -26,6 +31,11 @@ export function App() {
   const [bars, setBars] = useState<Bar[]>([]);
   const [timeframe, setTimeframe] = useState<Timeframe>('daily');
   const [lines, setLines] = useState<PriceLines>({ entry: 0, stop: 0, target: 0 });
+  const [existingLevels, setExistingLevels] = useState<ExistingOrderLevels>({
+    entries: [],
+    stops: [],
+    targets: [],
+  });
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -131,7 +141,12 @@ export function App() {
         <span className={pctClass(emaStats.ema20)}>{fmtPct(emaStats.ema20)}</span>
       </div>
       <div className="chart-wrap">
-        <Chart bars={displayBars} lines={lines} onLinesChange={setLines} />
+        <Chart
+          bars={displayBars}
+          lines={lines}
+          onLinesChange={setLines}
+          existingLevels={existingLevels}
+        />
       </div>
       <div className="topbar">
         <input
@@ -166,6 +181,7 @@ export function App() {
         ticker={ticker}
         lines={lines}
         currentPrice={bars.length > 0 ? bars[bars.length - 1]!.close : null}
+        onExistingLevelsChange={setExistingLevels}
       />
       {err && <div className="error" style={{ padding: 8 }}>{err}</div>}
     </div>

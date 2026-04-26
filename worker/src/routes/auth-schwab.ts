@@ -59,19 +59,19 @@ authSchwabRoute.get('/callback', async (c) => {
 authSchwabRoute.get('/status', async (c) => {
   const identity = c.get('identity');
   const tokens = await loadSchwabTokens(c.env, identity.sub);
-  if (!tokens) return c.json({ linked: false, expiresAt: null, refreshExpired: null });
-  // Schwab refresh tokens are hard-capped at 7 days. Without an explicit field
-  // we approximate freshness by treating tokens older than 7 days as expired.
-  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-  const accessExpired = !tokens.expiresAt || tokens.expiresAt < Date.now();
-  // If we know the issuance time (expiresAt - 1800s window for ~30min access token),
-  // we can guess refresh-token age. Simpler heuristic: if accessExpired AND
-  // tokens.expiresAt < now - 7d, refresh has likely also expired.
-  const refreshLikelyExpired = !!tokens.expiresAt && tokens.expiresAt < Date.now() - SEVEN_DAYS_MS;
-  return c.json({
-    linked: !refreshLikelyExpired,
-    expiresAt: tokens.expiresAt ?? null,
-    accessExpired,
-    refreshLikelyExpired,
-  });
+  if (!tokens) return c.json({ linked: false, expiresAt: null });
+
+  // Actively try to obtain a usable access token. If the refresh token is
+  // dead (>7 day Schwab cap or revoked), this throws and we report unlinked.
+  try {
+    const auth = schwabAuthFor(c.env, identity.sub);
+    if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
+    const accessToken = await auth.getAccessToken();
+    if (!accessToken) {
+      return c.json({ linked: false, expiresAt: tokens.expiresAt ?? null });
+    }
+    return c.json({ linked: true, expiresAt: tokens.expiresAt ?? null });
+  } catch {
+    return c.json({ linked: false, expiresAt: tokens.expiresAt ?? null });
+  }
 });

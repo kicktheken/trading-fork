@@ -16,10 +16,17 @@ export interface PriceLines {
   target: number;
 }
 
+export interface ExistingLevels {
+  entries: number[];
+  stops: number[];
+  targets: number[];
+}
+
 interface Props {
   bars: Bar[];
   lines: PriceLines;
   onLinesChange: (lines: PriceLines) => void;
+  existingLevels?: ExistingLevels;
 }
 
 const LINE_SPEC: Array<{ key: keyof PriceLines; color: string; zLevel: number }> = [
@@ -180,6 +187,43 @@ function ensureOverlayRegistered() {
     },
     createYAxisFigures: () => [],
   });
+
+  // Second overlay type for read-only existing-order levels: a thin dotted line
+  // with no tag, no hit area, no drag handlers. Distinct from the draggable
+  // user lines so we don't accidentally let users drag broker-side state.
+  registerOverlay({
+    name: 'existingPriceLine',
+    totalStep: 2,
+    needDefaultPointFigure: false,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: ({ coordinates, bounding, overlay }) => {
+      const pt = coordinates[0];
+      if (!pt) return [];
+      const ext = overlay.extendData as { color?: string } | undefined;
+      const color = ext?.color ?? '#8b97a4';
+      return [
+        {
+          key: 'line',
+          type: 'line',
+          attrs: {
+            coordinates: [
+              { x: 0, y: pt.y },
+              { x: bounding.width, y: pt.y },
+            ],
+          },
+          styles: {
+            style: 'dashed',
+            color,
+            size: 1,
+            dashedValue: [3, 3],
+          },
+          ignoreEvent: true,
+        },
+      ];
+    },
+    createYAxisFigures: () => [],
+  });
 }
 
 function formatPrice(v: number, precision: number, thousandsSeparator: string): string {
@@ -250,7 +294,7 @@ function debugLog(kind: string, e: TouchEvent) {
   void targetRect;
 }
 
-export function Chart({ bars, lines, onLinesChange }: Props) {
+export function Chart({ bars, lines, onLinesChange, existingLevels }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<KChart | null>(null);
   const overlayIds = useRef<Record<keyof PriceLines, string | null>>({
@@ -548,6 +592,45 @@ export function Chart({ bars, lines, onLinesChange }: Props) {
       overlayIds.current[key] = typeof id === 'string' ? id : null;
     }
   }, [bars, lines.entry, lines.stop, lines.target]);
+
+  // Existing-order overlays: thin dotted lines for entries/stops/targets that
+  // already exist on the broker side. Read-only — recreated whenever the
+  // aggregated levels change. Colors mirror the user-line palette but use a
+  // distinct dotted style and no tag so they're visually subordinate.
+  const existingOverlayIds = useRef<string[]>([]);
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    // Tear down previous overlays.
+    for (const id of existingOverlayIds.current) {
+      chart.removeOverlay(id);
+    }
+    existingOverlayIds.current = [];
+
+    if (!existingLevels || bars.length === 0) return;
+
+    const create = (price: number, color: string) => {
+      const id = chart.createOverlay({
+        name: 'existingPriceLine',
+        lock: true,
+        zLevel: 50, // below the user's draggable lines (which use 100/110/120)
+        points: [{ value: price }],
+        extendData: { color },
+      });
+      if (typeof id === 'string') existingOverlayIds.current.push(id);
+    };
+
+    for (const p of existingLevels.entries) create(p, '#d29922'); // yellow
+    for (const p of existingLevels.stops) create(p, '#f85149'); // red
+    for (const p of existingLevels.targets) create(p, '#3fb950'); // green
+  }, [
+    bars.length,
+    // Stable serialization keeps the effect from re-firing on identical levels.
+    JSON.stringify(existingLevels?.entries ?? []),
+    JSON.stringify(existingLevels?.stops ?? []),
+    JSON.stringify(existingLevels?.targets ?? []),
+  ]);
 
   return <div className="chart" ref={elRef} />;
 }

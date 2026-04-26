@@ -6,6 +6,7 @@ import {
   fetchSchwabAccounts,
   fetchSchwabStatus,
   submitOrder,
+  type ExistingOrderLevels,
   type SchwabAccountSummary,
   type SchwabOrderSnapshot,
 } from '../api/client';
@@ -127,6 +128,48 @@ function fmtAcctMask(num: string): string {
   return num.length > 4 ? `••••${num.slice(-4)}` : num;
 }
 
+// Walk an order tree and bucket its non-terminal SINGLE legs into entry/stop/
+// target by role: parent leg = entry; OCO LIMIT child = target; OCO STOP child = stop.
+function extractLevels(o: SchwabOrderSnapshot, out: ExistingOrderLevels): void {
+  // The parent of a TRIGGER+OCO bracket carries the entry price.
+  if (o.orderStrategyType === 'TRIGGER') {
+    const px = o.orderType === 'LIMIT' ? o.price : o.stopPrice;
+    if (typeof px === 'number' && px > 0 && o.status !== 'REPLACED') {
+      out.entries.push(px);
+    }
+  }
+  // Children of an OCO node are the bracket legs. We label LIMIT as target and
+  // STOP/STOP_LIMIT/TRAILING_STOP as stop, regardless of position.
+  if (o.orderStrategyType === 'OCO') {
+    for (const c of o.childOrderStrategies ?? []) {
+      if (c.status === 'REPLACED' || c.status === 'CANCELED' || c.status === 'REJECTED' || c.status === 'EXPIRED' || c.status === 'FILLED') {
+        continue;
+      }
+      if (c.orderType === 'LIMIT' && typeof c.price === 'number') {
+        out.targets.push(c.price);
+      } else if (
+        (c.orderType === 'STOP' || c.orderType === 'STOP_LIMIT' || c.orderType === 'TRAILING_STOP') &&
+        typeof c.stopPrice === 'number'
+      ) {
+        out.stops.push(c.stopPrice);
+      }
+    }
+  }
+  for (const c of o.childOrderStrategies ?? []) {
+    extractLevels(c, out);
+  }
+}
+
+function aggregateLevels(orderTrees: SchwabOrderSnapshot[]): ExistingOrderLevels {
+  const out: ExistingOrderLevels = { entries: [], stops: [], targets: [] };
+  for (const t of orderTrees) extractLevels(t, out);
+  // Dedupe to avoid stacking lines at identical prices.
+  out.entries = [...new Set(out.entries)];
+  out.stops = [...new Set(out.stops)];
+  out.targets = [...new Set(out.targets)];
+  return out;
+}
+
 interface AccountResult {
   accountNumber: string;
   accountHash: string;
@@ -153,9 +196,10 @@ interface Props {
   ticker: string;
   lines: PriceLines;
   currentPrice: number | null;
+  onExistingLevelsChange?: (levels: ExistingOrderLevels) => void;
 }
 
-export function TradePanel({ ticker, lines, currentPrice }: Props) {
+export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
@@ -189,7 +233,21 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
               if (!cancelled) setAccounts(accts);
             })
             .catch((e) => {
-              if (!cancelled) setAccountsError(e instanceof Error ? e.message : String(e));
+              if (cancelled) return;
+              const msg = e instanceof Error ? e.message : String(e);
+              // Token-revocation/refresh failures aren't really "errors" the
+              // user can act on — they just need to relink. Flip to unlinked
+              // so the Connect Schwab button appears, and stay quiet.
+              if (
+                msg.includes('No valid tokens') ||
+                msg.includes('cannot refresh') ||
+                msg.includes('REFRESH_NEEDED') ||
+                msg.includes('invalid_grant')
+              ) {
+                setSchwabLinked(false);
+              } else {
+                setAccountsError(msg);
+              }
             });
         }
       })
@@ -214,6 +272,7 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
     if (!accounts || !ticker) {
       setActiveCounts({});
       activeOrdersCache.current = {};
+      onExistingLevelsChange?.({ entries: [], stops: [], targets: [] });
       return;
     }
     let cancelled = false;
@@ -230,12 +289,15 @@ export function TradePanel({ ticker, lines, currentPrice }: Props) {
       if (cancelled) return;
       const counts: Record<string, number> = {};
       const cache: Record<string, SchwabOrderSnapshot[]> = {};
+      const allOrders: SchwabOrderSnapshot[] = [];
       for (const r of rows) {
         counts[r.acctNum] = r.orders.length;
         cache[r.acctNum] = r.orders;
+        allOrders.push(...r.orders);
       }
       setActiveCounts(counts);
       activeOrdersCache.current = cache;
+      onExistingLevelsChange?.(aggregateLevels(allOrders));
     });
     return () => {
       cancelled = true;
