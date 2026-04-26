@@ -340,20 +340,25 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
     };
   }, [accounts, ticker]);
 
-  const showActiveOrdersFor = (account: SchwabAccountSummary) => {
-    const cached = activeOrdersCache.current[account.accountNumber] ?? [];
+  const showAllActiveOrders = () => {
+    if (!accounts) return;
     stopAllPolling();
     setError(null);
-    setResults(
-      cached.map((snap) => ({
-        accountNumber: account.accountNumber,
-        accountHash: account.hashValue,
-        ok: true,
-        orderId: snap.orderId,
-        snapshot: snap,
-        polling: false,
-      })),
-    );
+    const rows: AccountResult[] = [];
+    for (const a of accounts) {
+      const cached = activeOrdersCache.current[a.accountNumber] ?? [];
+      for (const snap of cached) {
+        rows.push({
+          accountNumber: a.accountNumber,
+          accountHash: a.hashValue,
+          ok: true,
+          orderId: snap.orderId,
+          snapshot: snap,
+          polling: false,
+        });
+      }
+    }
+    setResults(rows);
   };
 
   const stopAllPolling = () => {
@@ -569,10 +574,10 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
                           <button
                             type="button"
                             className="active-badge"
-                            title={`${activeCount} active ${ticker} order${activeCount > 1 ? 's' : ''}`}
+                            title={`${activeCount} active ${ticker} order${activeCount > 1 ? 's' : ''} on this account · click to view all accounts`}
                             onClick={(e) => {
                               e.preventDefault();
-                              showActiveOrdersFor(a);
+                              showAllActiveOrders();
                             }}
                           >
                             {activeCount}
