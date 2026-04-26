@@ -185,10 +185,19 @@ export interface SchwabOrderSnapshot {
   status: string;
   statusDescription?: string;
   enteredTime?: string;
+  releaseTime?: string;
+  quantity?: number;
   filledQuantity?: number;
   remainingQuantity?: number;
   orderType?: string;
   orderStrategyType?: string;
+  price?: number;
+  stopPrice?: number;
+  orderLegCollection?: Array<{
+    instruction?: string;
+    quantity?: number;
+    instrument?: { symbol?: string };
+  }>;
   childOrderStrategies?: SchwabOrderSnapshot[];
 }
 

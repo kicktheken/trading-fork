@@ -128,6 +128,42 @@ function fmtAcctMask(num: string): string {
   return num.length > 4 ? `••••${num.slice(-4)}` : num;
 }
 
+// Schwab orders carry either price (LIMIT) or stopPrice (STOP/STOP_LIMIT/TRAILING).
+// Returns the relevant price for display, or null for grouping nodes (OCO/TRIGGER
+// without a price set on the parent).
+function orderPrice(o: SchwabOrderSnapshot): number | null {
+  if (typeof o.price === 'number' && o.price > 0) return o.price;
+  if (typeof o.stopPrice === 'number' && o.stopPrice > 0) return o.stopPrice;
+  return null;
+}
+
+function orderQty(o: SchwabOrderSnapshot): number | null {
+  if (typeof o.quantity === 'number' && o.quantity > 0) return o.quantity;
+  // Fallback: sum the legs (TRIGGER parents sometimes lack top-level quantity).
+  const legs = o.orderLegCollection ?? [];
+  const sum = legs.reduce((acc, l) => acc + (l.quantity ?? 0), 0);
+  return sum > 0 ? sum : null;
+}
+
+// Compact "Apr 28 09:31 ET" label for releaseTime.
+function fmtReleaseTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return `${fmt.format(d)} ET`;
+  } catch {
+    return iso;
+  }
+}
+
 // Walk an order tree and bucket its non-terminal SINGLE legs into entry/stop/
 // target by role: parent leg = entry; OCO LIMIT child = target; OCO STOP child = stop.
 function extractLevels(o: SchwabOrderSnapshot, out: ExistingOrderLevels): void {
@@ -625,24 +661,54 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
                         <div className="result-line">
                           <span className="result-label">Parent</span>
                           <span className={statusClass(snap.status)}>{snap.status}</span>
+                          {(() => {
+                            const px = orderPrice(snap);
+                            const qty = orderQty(snap);
+                            return (
+                              <>
+                                {qty != null && <span className="muted-text">{qty} sh</span>}
+                                {px != null && (
+                                  <span className="muted-text">@ ${px.toFixed(2)}</span>
+                                )}
+                              </>
+                            );
+                          })()}
                           {typeof filled === 'number' && total !== null && (
                             <span className="muted-text">
-                              {filled}/{total}
+                              filled {filled}/{total}
+                            </span>
+                          )}
+                          {snap.releaseTime && (
+                            <span className="muted-text">
+                              release {fmtReleaseTime(snap.releaseTime)}
                             </span>
                           )}
                           {snap.statusDescription && (
                             <span className="status-detail">{snap.statusDescription}</span>
                           )}
                         </div>
-                        {flattenChildren(snap).map((c, i) => (
-                          <div key={c.orderId ?? i} className="result-line">
-                            <span className="result-label">{childLabel(c, i)}</span>
-                            <span className={statusClass(c.status)}>{c.status}</span>
-                            {c.statusDescription && (
-                              <span className="status-detail">{c.statusDescription}</span>
-                            )}
-                          </div>
-                        ))}
+                        {flattenChildren(snap).map((c, i) => {
+                          const px = orderPrice(c);
+                          const qty = orderQty(c);
+                          return (
+                            <div key={c.orderId ?? i} className="result-line">
+                              <span className="result-label">{childLabel(c, i)}</span>
+                              <span className={statusClass(c.status)}>{c.status}</span>
+                              {qty != null && <span className="muted-text">{qty} sh</span>}
+                              {px != null && (
+                                <span className="muted-text">@ ${px.toFixed(2)}</span>
+                              )}
+                              {c.releaseTime && (
+                                <span className="muted-text">
+                                  release {fmtReleaseTime(c.releaseTime)}
+                                </span>
+                              )}
+                              {c.statusDescription && (
+                                <span className="status-detail">{c.statusDescription}</span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </>
                     ) : r.orderId ? (
                       <div className="result-line">
