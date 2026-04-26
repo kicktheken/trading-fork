@@ -76,6 +76,36 @@ async function firstAccountHash(accessToken: string): Promise<string> {
   return first.hashValue;
 }
 
+export interface SchwabOrderSnapshot {
+  orderId: string;
+  status: string;
+  statusDescription?: string;
+  enteredTime?: string;
+  filledQuantity?: number;
+  remainingQuantity?: number;
+  childOrderStrategies?: SchwabOrderSnapshot[];
+}
+
+export async function fetchSchwabOrder(
+  env: Env,
+  userSub: string,
+  orderId: string,
+): Promise<SchwabOrderSnapshot> {
+  const auth = schwabAuthFor(env, userSub);
+  if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
+  const accessToken = await auth.getAccessToken();
+  if (!accessToken) throw new Error('schwab: no access token');
+
+  const accountHash = await firstAccountHash(accessToken);
+  const res = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new Error(`schwab getOrder ${res.status}: ${await res.text()}`);
+  }
+  return (await res.json()) as SchwabOrderSnapshot;
+}
+
 // Parent BUY STOP at `entry`, child OCO = SELL LIMIT @ target + SELL STOP @ stop.
 // 1-share for now. All prices are numbers (Schwab rejects strings on the new API).
 export function buildStopBuyWithOcoOrder(input: PlaceOrderInput) {

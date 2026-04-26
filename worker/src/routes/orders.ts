@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppVariables, Env } from '../env';
 import { ibkrAdapter, type PlaceOrderInput } from '../brokers/ibkr';
-import { schwabAdapter } from '../brokers/schwab';
+import { fetchSchwabOrder, schwabAdapter } from '../brokers/schwab';
 
 export const ordersRoute = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
@@ -33,6 +33,23 @@ ordersRoute.post('/', async (c) => {
       target: body.target,
     });
     return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+ordersRoute.get('/:broker/:id', async (c) => {
+  const broker = c.req.param('broker');
+  const id = c.req.param('id');
+  if (broker !== 'schwab') {
+    return c.json({ error: `${broker} order status not implemented` }, 400);
+  }
+  if (!/^\d+$/.test(id)) return c.json({ error: 'invalid order id' }, 400);
+
+  const identity = c.get('identity');
+  try {
+    const order = await fetchSchwabOrder(c.env, identity.sub, id);
+    return c.json(order);
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }

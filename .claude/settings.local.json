@@ -24,7 +24,10 @@
       "Bash(curl *)",
       "Bash(pnpm --filter web view klinecharts version)",
       "Bash(pnpm --filter web list klinecharts)",
-      "Bash(npm view *)"
+      "Bash(npm view *)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:tda-api.readthedocs.io)",
+      "WebFetch(domain:gist.github.com)"
     ]
   }
 }

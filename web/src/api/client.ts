@@ -49,3 +49,21 @@ export async function fetchSchwabStatus(): Promise<SchwabStatus> {
   const res = await fetch('/api/auth/schwab/status');
   return json<SchwabStatus>(res);
 }
+
+export interface SchwabOrderSnapshot {
+  orderId: string;
+  status: string;
+  statusDescription?: string;
+  enteredTime?: string;
+  filledQuantity?: number;
+  remainingQuantity?: number;
+  childOrderStrategies?: SchwabOrderSnapshot[];
+}
+
+export async function fetchOrder(
+  broker: 'schwab',
+  orderId: string,
+): Promise<SchwabOrderSnapshot> {
+  const res = await fetch(`/api/orders/${broker}/${encodeURIComponent(orderId)}`);
+  return json<SchwabOrderSnapshot>(res);
+}
