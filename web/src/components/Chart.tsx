@@ -123,7 +123,7 @@ function ensureOverlayRegistered() {
           styles: {
             style: 'solid',
             color,
-            size: 1.5,
+            size: 2.5,
           },
           ignoreEvent: true,
         },
@@ -213,10 +213,9 @@ function ensureOverlayRegistered() {
             ],
           },
           styles: {
-            style: 'dashed',
+            style: 'solid',
             color,
             size: 1,
-            dashedValue: [3, 3],
           },
           ignoreEvent: true,
         },
