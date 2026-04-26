@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Chart, type PriceLines } from './components/Chart';
 import { TradePanel } from './components/TradePanel';
-import { fetchBars, type Bar } from './api/client';
+import { fetchBars, fetchQuote, type Bar } from './api/client';
 import { ema, pctChangeOverLookback } from './lib/ema';
 import { aggregate, type Timeframe } from './lib/aggregate';
 
@@ -69,6 +69,43 @@ export function App() {
       }
     }
   };
+
+  // Live price polling: every 1s, fetch the latest trade and update the most
+  // recent bar's close (extending high/low if the live price breaks them).
+  useEffect(() => {
+    if (!ticker) return;
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const tick = async () => {
+      try {
+        const q = await fetchQuote(ticker);
+        if (cancelled) return;
+        setBars((prev) => {
+          if (prev.length === 0) return prev;
+          const last = prev[prev.length - 1]!;
+          if (last.close === q.price && last.high >= q.price && last.low <= q.price) {
+            return prev;
+          }
+          const updated: Bar = {
+            ...last,
+            close: q.price,
+            high: Math.max(last.high, q.price),
+            low: Math.min(last.low, q.price),
+          };
+          return [...prev.slice(0, -1), updated];
+        });
+      } catch {
+        // ignore transient errors; next tick will retry
+      }
+      if (!cancelled) timer = window.setTimeout(tick, 1000);
+    };
+    timer = window.setTimeout(tick, 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [ticker]);
 
   const displayBars = useMemo(() => aggregate(bars, timeframe), [bars, timeframe]);
 

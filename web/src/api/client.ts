@@ -46,6 +46,18 @@ export async function fetchBars(ticker: string, tf: 'daily' | 'weekly' = 'daily'
   return data.bars;
 }
 
+export interface Quote {
+  ticker: string;
+  price: number;
+  size: number;
+  timestamp: number;
+}
+
+export async function fetchQuote(ticker: string): Promise<Quote> {
+  const res = await fetch(`/api/quote?ticker=${encodeURIComponent(ticker)}`);
+  return json<Quote>(res);
+}
+
 export async function submitOrder(order: OrderRequest): Promise<{ id: string }> {
   const res = await fetch('/api/orders', {
     method: 'POST',
