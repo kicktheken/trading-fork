@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   fetchOrder,
   fetchSchwabStatus,
@@ -81,6 +82,8 @@ export function TradePanel({ ticker, lines }: Props) {
   const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
   const [orderSnapshot, setOrderSnapshot] = useState<SchwabOrderSnapshot | null>(null);
   const pollTimer = useRef<number | null>(null);
+  // Generation counter — incrementing it cancels any in-flight or scheduled polls.
+  const pollGen = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,16 +107,28 @@ export function TradePanel({ ticker, lines }: Props) {
     [],
   );
 
+  const stopPolling = () => {
+    if (pollTimer.current !== null) {
+      window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+    pollGen.current++;
+  };
+
   const startPolling = (orderId: string) => {
     if (broker !== 'schwab') return;
     if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+    const myGen = ++pollGen.current;
     let attempt = 0;
     let currentId = orderId;
     let firstFetchSucceeded = false;
     const tick = async () => {
+      // Bail out if a newer generation has been started or polling was stopped.
+      if (myGen !== pollGen.current) return;
       attempt++;
       try {
         const snap = await fetchOrder('schwab', currentId);
+        if (myGen !== pollGen.current) return;
         firstFetchSucceeded = true;
         setOrderSnapshot(snap);
 
@@ -231,30 +246,56 @@ export function TradePanel({ ticker, lines }: Props) {
           />
         )}
       </div>
-      {status && <div className="status">{status}</div>}
-      {orderSnapshot && (
-        <div className="status">
-          <div>
-            Parent: <strong>{orderSnapshot.status}</strong>
-            {typeof orderSnapshot.filledQuantity === 'number' && (
-              <>
-                {' '}· filled {orderSnapshot.filledQuantity}/
-                {orderSnapshot.filledQuantity + (orderSnapshot.remainingQuantity ?? 0)}
-              </>
-            )}
-            {orderSnapshot.statusDescription && (
-              <div className="status-detail">{orderSnapshot.statusDescription}</div>
-            )}
-          </div>
-          {flattenChildren(orderSnapshot).map((c, i) => (
-            <div key={c.orderId ?? i}>
-              {childLabel(c, i)}: <strong>{c.status}</strong>
-              {c.statusDescription && <div className="status-detail">{c.statusDescription}</div>}
+      {(status || orderSnapshot || error) &&
+        createPortal(
+          <div
+            className={`top-banner${error ? ' top-banner-error' : ''}`}
+            role={error ? 'alert' : 'status'}
+          >
+            <div className="top-banner-body">
+              {error && <div className="top-banner-line">{error}</div>}
+              {status && <div className="top-banner-line">{status}</div>}
+              {orderSnapshot && (
+                <>
+                  <div className="top-banner-line">
+                    Parent: <strong>{orderSnapshot.status}</strong>
+                    {typeof orderSnapshot.filledQuantity === 'number' && (
+                      <>
+                        {' '}· filled {orderSnapshot.filledQuantity}/
+                        {orderSnapshot.filledQuantity + (orderSnapshot.remainingQuantity ?? 0)}
+                      </>
+                    )}
+                    {orderSnapshot.statusDescription && (
+                      <div className="status-detail">{orderSnapshot.statusDescription}</div>
+                    )}
+                  </div>
+                  {flattenChildren(orderSnapshot).map((c, i) => (
+                    <div key={c.orderId ?? i} className="top-banner-line">
+                      {childLabel(c, i)}: <strong>{c.status}</strong>
+                      {c.statusDescription && (
+                        <div className="status-detail">{c.statusDescription}</div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
-          ))}
-        </div>
-      )}
-      {error && <div className="error">{error}</div>}
+            <button
+              type="button"
+              className="top-banner-close"
+              aria-label="Dismiss"
+              onClick={() => {
+                stopPolling();
+                setError(null);
+                setStatus(null);
+                setOrderSnapshot(null);
+              }}
+            >
+              ×
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
