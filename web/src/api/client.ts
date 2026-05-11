@@ -20,12 +20,21 @@ export interface OrderRequest {
   currentPrice?: number;
 }
 
+export interface SchwabPosition {
+  symbol: string;
+  longQuantity: number;
+  shortQuantity: number;
+  averagePrice: number;
+  marketValue: number;
+}
+
 export interface SchwabAccountSummary {
   accountNumber: string;
   hashValue: string;
   type: string;
   availableFunds: number;
   totalValue: number;
+  positions: SchwabPosition[];
 }
 
 export async function fetchSchwabAccounts(): Promise<SchwabAccountSummary[]> {
@@ -50,7 +59,13 @@ export async function fetchBars(ticker: string, tf: 'daily' | 'weekly' = 'daily'
 
 export interface Quote {
   ticker: string;
+  // Display price = last trade print. Falls back to NBBO midpoint only when
+  // no trade has occurred (brand new symbol).
   price: number;
+  bid?: number;
+  ask?: number;
+  bidSize?: number;
+  askSize?: number;
   size: number;
   timestamp: number;
 }
@@ -131,4 +146,31 @@ export async function fetchActiveOrdersForTicker(
   );
   const data = await json<{ orders: SchwabOrderSnapshot[] }>(res);
   return data.orders;
+}
+
+export async function replaceChildOrderPrice(
+  orderId: string,
+  accountHash: string,
+  price: number,
+): Promise<{ id: string }> {
+  const res = await fetch(`/api/orders/schwab/child/${encodeURIComponent(orderId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accountHash, price }),
+  });
+  return json<{ id: string }>(res);
+}
+
+export async function replaceParentEntry(
+  orderId: string,
+  accountHash: string,
+  entry: number,
+  currentPrice?: number,
+): Promise<{ id: string }> {
+  const res = await fetch(`/api/orders/schwab/${encodeURIComponent(orderId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accountHash, entry, currentPrice }),
+  });
+  return json<{ id: string }>(res);
 }

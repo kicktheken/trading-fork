@@ -26,6 +26,10 @@ interface Props {
   bars: Bar[];
   lines: PriceLines;
   onLinesChange: (lines: PriceLines) => void;
+  // Optional: invoked only when the user releases a drag (not on every tick).
+  // The same final PriceLines value is also delivered via onLinesChange during
+  // the drag — this hook is meant for committing side-effects like API calls.
+  onLinesCommit?: (lines: PriceLines) => void;
   existingLevels?: ExistingLevels;
 }
 
@@ -293,7 +297,7 @@ function debugLog(kind: string, e: TouchEvent) {
   void targetRect;
 }
 
-export function Chart({ bars, lines, onLinesChange, existingLevels }: Props) {
+export function Chart({ bars, lines, onLinesChange, onLinesCommit, existingLevels }: Props) {
   const elRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<KChart | null>(null);
   const overlayIds = useRef<Record<keyof PriceLines, string | null>>({
@@ -305,6 +309,8 @@ export function Chart({ bars, lines, onLinesChange, existingLevels }: Props) {
   linesRef.current = lines;
   const onChangeRef = useRef(onLinesChange);
   onChangeRef.current = onLinesChange;
+  const onCommitRef = useRef(onLinesCommit);
+  onCommitRef.current = onLinesCommit;
 
   useEffect(() => {
     ensureOverlayRegistered();
@@ -585,6 +591,11 @@ export function Chart({ bars, lines, onLinesChange, existingLevels }: Props) {
               onChangeRef.current(next);
             }
           }
+          return false;
+        },
+        onPressedMoveEnd: () => {
+          // Fire the commit hook with the final value once the user releases.
+          onCommitRef.current?.(linesRef.current);
           return false;
         },
       });

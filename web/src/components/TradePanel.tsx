@@ -10,6 +10,16 @@ import {
   type SchwabAccountSummary,
   type SchwabOrderSnapshot,
 } from '../api/client';
+
+export type ViewMode = 'buy' | 'update';
+
+// Aggregated state we hand back up to App for: (1) topbar gain readout,
+// (2) U mode gating, (3) drag-to-edit handlers in update mode.
+export interface SchwabContext {
+  accounts: SchwabAccountSummary[];
+  // accountNumber -> active order trees for the current ticker.
+  ordersByAccount: Record<string, SchwabOrderSnapshot[]>;
+}
 import type { PriceLines } from './Chart';
 import { SwipeButton } from './SwipeButton';
 
@@ -232,10 +242,23 @@ interface Props {
   ticker: string;
   lines: PriceLines;
   currentPrice: number | null;
+  mode: ViewMode;
+  // Bump to force a re-fetch of active orders. Used after order updates so the
+  // chart's average lines snap to the freshly-updated broker state.
+  refreshKey?: number;
   onExistingLevelsChange?: (levels: ExistingOrderLevels) => void;
+  onSchwabContextChange?: (ctx: SchwabContext) => void;
 }
 
-export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange }: Props) {
+export function TradePanel({
+  ticker,
+  lines,
+  currentPrice,
+  mode,
+  refreshKey = 0,
+  onExistingLevelsChange,
+  onSchwabContextChange,
+}: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [schwabLinked, setSchwabLinked] = useState<boolean | null>(null);
@@ -266,7 +289,9 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
         if (s.linked) {
           fetchSchwabAccounts()
             .then((accts) => {
-              if (!cancelled) setAccounts(accts);
+              if (cancelled) return;
+              setAccounts(accts);
+              onSchwabContextChange?.({ accounts: accts, ordersByAccount: {} });
             })
             .catch((e) => {
               if (cancelled) return;
@@ -309,6 +334,7 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
       setActiveCounts({});
       activeOrdersCache.current = {};
       onExistingLevelsChange?.({ entries: [], stops: [], targets: [] });
+      onSchwabContextChange?.({ accounts: accounts ?? [], ordersByAccount: {} });
       return;
     }
     let cancelled = false;
@@ -334,11 +360,12 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
       setActiveCounts(counts);
       activeOrdersCache.current = cache;
       onExistingLevelsChange?.(aggregateLevels(allOrders));
+      onSchwabContextChange?.({ accounts, ordersByAccount: cache });
     });
     return () => {
       cancelled = true;
     };
-  }, [accounts, ticker]);
+  }, [accounts, ticker, refreshKey]);
 
   const showAllActiveOrders = () => {
     if (!accounts) return;
@@ -561,12 +588,35 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
                       ? Math.floor(dollars / lines.entry)
                       : 0;
                   const activeCount = activeCounts[a.accountNumber] ?? 0;
+                  // Compute this account's position-gain for the current ticker.
+                  // Uses Schwab's marketValue when present; falls back to live price.
+                  let posGain: { dollar: number; pct: number; qty: number } | null = null;
+                  if (mode === 'update') {
+                    let q = 0;
+                    let cost = 0;
+                    let mv = 0;
+                    for (const p of a.positions) {
+                      if (p.symbol !== ticker) continue;
+                      const net = (p.longQuantity ?? 0) - (p.shortQuantity ?? 0);
+                      if (net === 0) continue;
+                      q += net;
+                      cost += net * (p.averagePrice ?? 0);
+                      mv += p.marketValue ?? 0;
+                    }
+                    if (q !== 0) {
+                      const liveMv = mv !== 0 ? mv : currentPrice != null ? currentPrice * q : 0;
+                      const dollar = liveMv - cost;
+                      const pctG = cost > 0 ? (dollar / cost) * 100 : 0;
+                      posGain = { dollar, pct: pctG, qty: q };
+                    }
+                  }
                   return (
                     <div className="account-row" key={a.accountNumber}>
                       <label className="account-check">
                         <input
                           type="checkbox"
                           checked={alloc.enabled}
+                          disabled={mode === 'update'}
                           onChange={(e) => setAlloc(a.accountNumber, { enabled: e.target.checked })}
                         />
                         <span className="account-name">{fmtAcctMask(a.accountNumber)}</span>
@@ -588,21 +638,51 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
                         <span>{fmtMoney(a.availableFunds)}</span>
                         <span className="muted-text">{fmtMoney(a.totalValue)}</span>
                       </div>
-                      <div className="account-meta">
-                        <span className="muted-text">{pct > 0 ? `${pct.toFixed(1)}%` : '—'}</span>
-                        <span className="muted-text">{qty > 0 ? `${qty} sh` : ''}</span>
-                      </div>
-                      <div className="account-amount">
-                        <input
-                          type="number"
-                          inputMode="decimal"
-                          min={0}
-                          step={50}
-                          placeholder="$"
-                          value={alloc.dollars}
-                          onChange={(e) => setAlloc(a.accountNumber, { dollars: e.target.value })}
-                        />
-                      </div>
+                      {mode === 'update' ? (
+                        <div className="account-meta">
+                          <span className="muted-text">
+                            {posGain ? `${posGain.qty} sh` : '—'}
+                          </span>
+                          <span className="muted-text">{a.type}</span>
+                        </div>
+                      ) : (
+                        <div className="account-meta">
+                          <span className="muted-text">{pct > 0 ? `${pct.toFixed(1)}%` : '—'}</span>
+                          <span className="muted-text">{qty > 0 ? `${qty} sh` : ''}</span>
+                        </div>
+                      )}
+                      {mode === 'update' ? (
+                        <div className="account-amount">
+                          {posGain ? (
+                            <div
+                              className={`pos-gain ${posGain.dollar >= 0 ? 'pos-gain-up' : 'pos-gain-down'}`}
+                            >
+                              <span className="pos-gain-dollar">
+                                {posGain.dollar >= 0 ? '+' : ''}
+                                ${Math.abs(posGain.dollar).toFixed(2)}
+                              </span>
+                              <span className="pos-gain-pct">
+                                {posGain.pct >= 0 ? '+' : ''}
+                                {posGain.pct.toFixed(2)}%
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="muted-text">no position</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="account-amount">
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step={50}
+                            placeholder="$"
+                            value={alloc.dollars}
+                            onChange={(e) => setAlloc(a.accountNumber, { dollars: e.target.value })}
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -613,14 +693,16 @@ export function TradePanel({ ticker, lines, currentPrice, onExistingLevelsChange
           <div className="trade-panel-row">
             <SwipeButton
               label={
-                ordersToSubmit.length === 0
-                  ? `Set qty on at least one account`
-                  : `Swipe to BUY ${ticker} (${ordersToSubmit.length} acct${
-                      ordersToSubmit.length > 1 ? 's' : ''
-                    })`
+                mode === 'update'
+                  ? `Update mode — drag a price line to edit`
+                  : ordersToSubmit.length === 0
+                    ? `Set qty on at least one account`
+                    : `Swipe to BUY ${ticker} (${ordersToSubmit.length} acct${
+                        ordersToSubmit.length > 1 ? 's' : ''
+                      })`
               }
               busy={busy || schwabLinked === null || accounts === null}
-              disabled={!canSubmit}
+              disabled={mode === 'update' || !canSubmit}
               onConfirm={onSubmit}
             />
           </div>

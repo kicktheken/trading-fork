@@ -4,6 +4,8 @@ import { ibkrAdapter, type PlaceOrderInput } from '../brokers/ibkr';
 import {
   fetchSchwabActiveOrdersForTicker,
   fetchSchwabOrder,
+  replaceSchwabChildOrderPrice,
+  replaceSchwabParentEntry,
   schwabAdapter,
 } from '../brokers/schwab';
 
@@ -103,6 +105,69 @@ ordersRoute.get('/schwab/active', async (c) => {
     );
     if (debug) return c.json(result);
     return c.json({ orders: result.orders });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// Replace a single SINGLE leaf child order (TP LIMIT or SL STOP) with a new price.
+// Body: { accountHash: string, price: number }
+ordersRoute.put('/schwab/child/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!/^\d+$/.test(id)) return c.json({ error: 'invalid order id' }, 400);
+  let body: { accountHash?: string; price?: number };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (!body.accountHash) return c.json({ error: 'accountHash required' }, 400);
+  if (typeof body.price !== 'number' || !Number.isFinite(body.price) || body.price <= 0) {
+    return c.json({ error: 'price must be > 0' }, 400);
+  }
+
+  const identity = c.get('identity');
+  try {
+    const result = await replaceSchwabChildOrderPrice(
+      c.env,
+      identity.sub,
+      body.accountHash,
+      id,
+      body.price,
+    );
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// Replace an entire TRIGGER parent's entry price; auto-switches BUY STOP/LIMIT.
+// Body: { accountHash: string, entry: number, currentPrice?: number }
+ordersRoute.put('/schwab/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!/^\d+$/.test(id)) return c.json({ error: 'invalid order id' }, 400);
+  let body: { accountHash?: string; entry?: number; currentPrice?: number };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  if (!body.accountHash) return c.json({ error: 'accountHash required' }, 400);
+  if (typeof body.entry !== 'number' || !Number.isFinite(body.entry) || body.entry <= 0) {
+    return c.json({ error: 'entry must be > 0' }, 400);
+  }
+
+  const identity = c.get('identity');
+  try {
+    const result = await replaceSchwabParentEntry(
+      c.env,
+      identity.sub,
+      body.accountHash,
+      id,
+      body.entry,
+      body.currentPrice,
+    );
+    return c.json(result);
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }

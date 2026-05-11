@@ -102,17 +102,37 @@ async function firstAccountHash(accessToken: string): Promise<string> {
   return first.hashValue;
 }
 
+export interface SchwabPosition {
+  symbol: string;
+  longQuantity: number;
+  shortQuantity: number;
+  averagePrice: number;
+  marketValue: number;
+}
+
 export interface SchwabAccountSummary {
   accountNumber: string;
   hashValue: string;
   type: string;
   availableFunds: number;
   totalValue: number;
+  positions: SchwabPosition[];
 }
 
 interface AccountNumbersEntry {
   accountNumber: string;
   hashValue: string;
+}
+
+interface AccountsApiPosition {
+  averagePrice?: number;
+  longQuantity?: number;
+  shortQuantity?: number;
+  marketValue?: number;
+  instrument?: {
+    symbol?: string;
+    assetType?: string;
+  };
 }
 
 interface AccountsApiEntry {
@@ -125,6 +145,7 @@ interface AccountsApiEntry {
       liquidationValue?: number;
       equity?: number;
     };
+    positions?: AccountsApiPosition[];
   };
 }
 
@@ -138,7 +159,7 @@ export async function fetchSchwabAccounts(env: Env, userSub: string): Promise<Sc
 
   const [numbersRes, accountsRes] = await Promise.all([
     fetch(`${TRADER_BASE}/accounts/accountNumbers`, { headers }),
-    fetch(`${TRADER_BASE}/accounts`, { headers }),
+    fetch(`${TRADER_BASE}/accounts?fields=positions`, { headers }),
   ]);
   if (!numbersRes.ok) {
     throw new Error(`schwab getAccountNumbers ${numbersRes.status}: ${await numbersRes.text()}`);
@@ -150,32 +171,48 @@ export async function fetchSchwabAccounts(env: Env, userSub: string): Promise<Sc
   const numbers = (await numbersRes.json()) as AccountNumbersEntry[];
   const accounts = (await accountsRes.json()) as AccountsApiEntry[];
 
-  const balanceByAccount = new Map<string, { type: string; available: number; total: number }>();
+  const dataByAccount = new Map<
+    string,
+    { type: string; available: number; total: number; positions: SchwabPosition[] }
+  >();
   for (const a of accounts) {
     const sa = a.securitiesAccount;
     if (!sa?.accountNumber) continue;
     const balances = sa.currentBalances ?? {};
-    // For cash accounts use cashAvailableForTrading; for margin, buyingPower.
     const available =
       balances.cashAvailableForTrading ??
       balances.buyingPower ??
       0;
     const total = balances.liquidationValue ?? balances.equity ?? 0;
-    balanceByAccount.set(sa.accountNumber, {
+    const positions: SchwabPosition[] = [];
+    for (const p of sa.positions ?? []) {
+      const sym = p.instrument?.symbol;
+      if (!sym) continue;
+      positions.push({
+        symbol: sym,
+        longQuantity: p.longQuantity ?? 0,
+        shortQuantity: p.shortQuantity ?? 0,
+        averagePrice: p.averagePrice ?? 0,
+        marketValue: p.marketValue ?? 0,
+      });
+    }
+    dataByAccount.set(sa.accountNumber, {
       type: sa.type ?? 'UNKNOWN',
       available,
       total,
+      positions,
     });
   }
 
   return numbers.map((n) => {
-    const b = balanceByAccount.get(n.accountNumber);
+    const b = dataByAccount.get(n.accountNumber);
     return {
       accountNumber: n.accountNumber,
       hashValue: n.hashValue,
       type: b?.type ?? 'UNKNOWN',
       availableFunds: b?.available ?? 0,
       totalValue: b?.total ?? 0,
+      positions: b?.positions ?? [],
     };
   });
 }
@@ -538,6 +575,174 @@ function nyDateAt(year: number, month: number, day: number, hour: number, minute
 
 function addDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 24 * 60 * 60 * 1000);
+}
+
+// Replace an entire TRIGGER+OCO bracket with a new entry price. Looks up the
+// existing tree to preserve TP/SL prices and the ticker/quantity. Auto-switches
+// BUY STOP <-> BUY LIMIT based on currentPrice (entry > current = STOP,
+// entry <= current = LIMIT).
+export async function replaceSchwabParentEntry(
+  env: Env,
+  userSub: string,
+  accountHash: string,
+  orderId: string,
+  newEntry: number,
+  currentPrice?: number,
+): Promise<{ id: string }> {
+  const auth = schwabAuthFor(env, userSub);
+  if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
+  const accessToken = await auth.getAccessToken();
+  if (!accessToken) throw new Error('schwab: no access token');
+
+  const getRes = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+  });
+  if (!getRes.ok) {
+    throw new Error(`schwab getOrder ${getRes.status}: ${await getRes.text()}`);
+  }
+  const existing = (await getRes.json()) as SchwabOrderSnapshot;
+  if (existing.orderStrategyType !== 'TRIGGER') {
+    throw new Error(
+      `expected TRIGGER parent, got ${existing.orderStrategyType}; nothing to replace`,
+    );
+  }
+
+  // Extract ticker, quantity, and existing TP/SL from the tree.
+  const ticker = existing.orderLegCollection?.[0]?.instrument?.symbol;
+  const quantity = existing.orderLegCollection?.[0]?.quantity ?? existing.quantity ?? 0;
+  if (!ticker) throw new Error('schwab: existing order has no symbol');
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw new Error(`schwab: invalid existing quantity ${quantity}`);
+  }
+  // Find OCO group's children to get current TP / SL.
+  let target: number | null = null;
+  let stop: number | null = null;
+  for (const c of existing.childOrderStrategies ?? []) {
+    if (c.orderStrategyType !== 'OCO') continue;
+    for (const leg of c.childOrderStrategies ?? []) {
+      if (leg.status === 'REPLACED' || leg.status === 'CANCELED') continue;
+      if (leg.orderType === 'LIMIT' && typeof leg.price === 'number') target = leg.price;
+      if (
+        (leg.orderType === 'STOP' || leg.orderType === 'STOP_LIMIT') &&
+        typeof leg.stopPrice === 'number'
+      ) {
+        stop = leg.stopPrice;
+      }
+    }
+  }
+  if (target == null || stop == null) {
+    throw new Error('schwab: could not extract current TP/SL from existing order');
+  }
+
+  const body = buildStopBuyWithOcoOrder({
+    ticker,
+    side: 'buy',
+    quantity,
+    entry: newEntry,
+    stop,
+    target,
+    currentPrice,
+  });
+
+  console.log(
+    '[schwab replaceParent] orderId=%s newEntry=%s currentPrice=%s body=%s',
+    orderId,
+    newEntry,
+    currentPrice ?? 'unset',
+    JSON.stringify(body),
+  );
+
+  const putRes = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const respText = await putRes.text();
+  console.log('[schwab replaceParent response] status=%d body=%s', putRes.status, respText || '<empty>');
+  if (!putRes.ok) {
+    throw new Error(`schwab PUT parent ${putRes.status}: ${respText}`);
+  }
+  const location = putRes.headers.get('location') ?? '';
+  const newId = location.match(/\/orders\/(\d+)/)?.[1] ?? `schwab:${Date.now()}`;
+  return { id: newId };
+}
+
+// Replace a single SINGLE leaf order (typically a TP LIMIT or SL STOP child of
+// an OCO group) with a new price. Returns the new orderId Schwab issues after
+// replacement (or null if the Location header is missing).
+export async function replaceSchwabChildOrderPrice(
+  env: Env,
+  userSub: string,
+  accountHash: string,
+  orderId: string,
+  newPrice: number,
+): Promise<{ id: string }> {
+  const auth = schwabAuthFor(env, userSub);
+  if (auth.refreshIfNeeded) await auth.refreshIfNeeded();
+  const accessToken = await auth.getAccessToken();
+  if (!accessToken) throw new Error('schwab: no access token');
+
+  // Fetch the existing order so we have all required fields for the PUT body.
+  const getRes = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+    headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+  });
+  if (!getRes.ok) {
+    throw new Error(`schwab getOrder ${getRes.status}: ${await getRes.text()}`);
+  }
+  const existing = (await getRes.json()) as SchwabOrderSnapshot;
+  if (existing.orderStrategyType !== 'SINGLE') {
+    throw new Error(
+      `expected SINGLE order, got ${existing.orderStrategyType}; use replaceSchwabParentOrder for trees`,
+    );
+  }
+  const round = (n: number) => Number(n.toFixed(2));
+  const isStop =
+    existing.orderType === 'STOP' ||
+    existing.orderType === 'STOP_LIMIT' ||
+    existing.orderType === 'TRAILING_STOP';
+
+  const legs =
+    existing.orderLegCollection?.map((l) => ({
+      instruction: l.instruction,
+      quantity: l.quantity,
+      instrument: { symbol: l.instrument?.symbol, assetType: 'EQUITY' as const },
+    })) ?? [];
+
+  const body: Record<string, unknown> = {
+    orderType: existing.orderType,
+    session: 'NORMAL',
+    duration: 'GOOD_TILL_CANCEL',
+    orderStrategyType: 'SINGLE',
+    orderLegCollection: legs,
+  };
+  if (isStop) body.stopPrice = round(newPrice);
+  else body.price = round(newPrice);
+
+  console.log('[schwab replaceChild] orderId=%s newPrice=%s body=%s', orderId, newPrice, JSON.stringify(body));
+
+  const putRes = await fetch(`${TRADER_BASE}/accounts/${accountHash}/orders/${orderId}`, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const respText = await putRes.text();
+  console.log('[schwab replaceChild response] status=%d body=%s', putRes.status, respText || '<empty>');
+  if (!putRes.ok) {
+    throw new Error(`schwab PUT child ${putRes.status}: ${respText}`);
+  }
+  const location = putRes.headers.get('location') ?? '';
+  const newId = location.match(/\/orders\/(\d+)/)?.[1] ?? `schwab:${Date.now()}`;
+  return { id: newId };
 }
 
 // Parent BUY at `entry` (STOP if entry > current, LIMIT if entry <= current),
